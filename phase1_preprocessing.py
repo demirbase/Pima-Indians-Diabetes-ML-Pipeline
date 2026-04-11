@@ -11,6 +11,37 @@
     5. Tüm adımları koyu tema grafiklerle görselleştir
     6. Temiz setleri CSV olarak kaydet
 =============================================================
+
+Modül Amacı
+-----------
+  Bu modül, Pima Indians Diabetes veri seti üzerinde 7 fazlı
+  makine öğrenmesi pipeline'ının ilk halkasını oluşturur.
+  Sonraki tüm fazlar (Faz 2–7) bu modülün ürettiği
+  ``phase1_outputs/``  dizinindeki CSV dosyalarını girdi olarak
+  kullanır.
+
+Veri Seti Hakkında
+------------------
+  Kaynak : Ulusal Diyabet ve Sindirim ve Böbrek Hastalıkları
+           Enstitüsü (NIDDK)
+  Örneklem: Yalnızca kadın, Pima Indian kökenli, ≥21 yaş
+  Boyut  : 768 örnek × 9 değişken (8 özellik + 1 hedef)
+  Sınıf  : %65.1 Negatif (Outcome=0) / %34.9 Pozitif (Outcome=1)
+  → FINAL_REPORT.md §2 ve phase1_report.md'ye bakınız.
+
+Girdiler
+--------
+  diabetes.csv : Ham veri dosyası (proje kök dizininde)
+
+Çıktılar
+--------
+  phase1_outputs/train_raw.csv      – Ham (ölçeklenmemiş) train seti
+  phase1_outputs/val_raw.csv        – Ham validation seti
+  phase1_outputs/test_raw.csv       – Ham test seti
+  phase1_outputs/train_scaled.csv   – z-skor ölçeklenmiş train seti
+  phase1_outputs/val_scaled.csv     – z-skor ölçeklenmiş val seti
+  phase1_outputs/test_scaled.csv    – z-skor ölçeklenmiş test seti
+  phase1_outputs/*.png              – 9 adet görselleştirme grafiği
 """
 
 import numpy as np
@@ -27,6 +58,11 @@ warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────
 #  KOYU TEMA AYARI
+#  GitHub dark-mode renk paleti kullanılmaktadır.
+#  Tüm fazlarda tutarlılık için bu değerler
+#  aynen korunmalıdır (FINAL_REPORT.md'de
+#  referans alınan görseller bu temaya göre
+#  üretilmiştir).
 # ─────────────────────────────────────────────
 DARK_BG    = "#0d1117"
 CARD_BG    = "#161b22"
@@ -67,6 +103,21 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ─────────────────────────────────────────────
 
 def save_fig(fname: str):
+    """
+    Mevcut Matplotlib figürünü ``OUTPUT_DIR`` altına kaydeder ve kapatır.
+
+    Parametreler
+    ------------
+    fname : str
+        Kaydedilecek dosyanın adı (örn. "01_zero_value_counts.png").
+        Yol otomatik olarak ``OUTPUT_DIR`` ile birleştirilir.
+
+    Notlar
+    ------
+    - ``facecolor=DARK_BG`` ile arka plan koyu temada kaydedilir;
+      bu sayede açık tema ekranlarda bile görsel tutarlılığı sağlanır.
+    - ``bbox_inches="tight"`` eksen etiketlerinin kırpılmasını önler.
+    """
     path = os.path.join(OUTPUT_DIR, fname)
     plt.savefig(path, bbox_inches="tight", facecolor=DARK_BG, dpi=150)
     plt.close()
@@ -74,6 +125,19 @@ def save_fig(fname: str):
 
 
 def section_header(title: str):
+    """
+    Konsol çıktısına görsel ayırıcı başlık basar.
+
+    Parametreler
+    ------------
+    title : str
+        Bölüm başlığı metni.
+
+    Notlar
+    ------
+    ASCII sanat formatı tüm fazlarda aynı kalmalıdır;
+    bu format phase1_report.md'deki bölüm yapısıyla örtüşür.
+    """
     line = "═" * 60
     print(f"\n{line}")
     print(f"  {title}")
@@ -85,6 +149,8 @@ def section_header(title: str):
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 0 — VERİ YÜKLEME")
 
+# Ham CSV dosyasını belleğe al.
+# Veri seti 768 satır (örnek) × 9 sütun (8 özellik + Outcome).
 df = pd.read_csv("diabetes.csv")
 print(f"\n  Satır: {df.shape[0]}  |  Sütun: {df.shape[1]}")
 print("\n  İlk 5 satır:")
@@ -94,12 +160,16 @@ print(df.dtypes.to_string())
 print("\n  Temel İstatistikler:")
 print(df.describe().round(2).to_string())
 
+# Bağımsız değişkenler (özellikler) ve hedef değişken tanımı.
+# FINAL_REPORT.md §2.1 tablosuna bakınız.
 FEATURE_COLS = ["Pregnancies", "Glucose", "BloodPressure",
                 "SkinThickness", "Insulin", "BMI",
                 "DiabetesPedigreeFunction", "Age"]
 TARGET_COL   = "Outcome"
 
-# Biyolojik olarak 0 olamayacak sütunlar
+# Biyolojik olarak 0 olamayacak sütunlar.
+# Pregnancies ve Age için 0 olası olduğundan listeye alınmaz.
+# FINAL_REPORT.md §2.1 ve phase1_report.md — Veri Kalitesi bölümüne bakınız.
 ZERO_COLS = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
 
 # ═══════════════════════════════════════════════════════════
@@ -107,6 +177,10 @@ ZERO_COLS = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 1A — SIFIR DEĞER ANALİZİ (Ham Veri)")
 
+# Her sütundaki 0 değerlerini say ve oranını hesapla.
+# Örnek: Insulin'de 374 sıfır (%48.7) — bu oran, later fazlarda
+# Insulin katsayısının neden anlamsız çıktığının temel gerekçesidir.
+# FINAL_REPORT.md §9.2'ye ("Anlamsız Değişkenler Meselesi") bakınız.
 zero_counts = (df[ZERO_COLS] == 0).sum()
 zero_pct    = (zero_counts / len(df) * 100).round(1)
 
@@ -155,6 +229,8 @@ save_fig("01_zero_value_counts.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 1B — HAM VERİ DAĞILIM GRAFİĞİ")
 
+# Ham dağılımlar çizildiğinde sıfır değerleri (yapay) spike'lar olarak görünür.
+# Bu grafik, medyan doldurma ihtiyacını görsel olarak kanıtlar.
 fig, axes = plt.subplots(2, 4, figsize=(18, 9))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("Ham Veri — Özellik Dağılımları (0 değerleri dahil)",
@@ -164,7 +240,9 @@ for i, (col, ax) in enumerate(zip(FEATURE_COLS, axes.flatten())):
     color = PALETTE_COLS[i % len(PALETTE_COLS)]
     ax.hist(df[col], bins=30, color=color, edgecolor=DARK_BG,
             linewidth=0.8, alpha=0.85)
-    # Ortalama ve medyan çizgileri
+    # Ortalama ve medyan çizgileri: eğer dağılım simetrik değilse
+    # (özellikle 0 değerleri sonrası), ortalama sola kayar; bu
+    # impütasyon için medyan tercihini güçlendirir.
     ax.axvline(df[col].mean(),   color=ACCENT3, linestyle="--",
                linewidth=1.4, label="Ort.")
     ax.axvline(df[col].median(), color=ACCENT2, linestyle=":",
@@ -183,11 +261,19 @@ save_fig("02_raw_distributions.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 2 — MEDYAN İLE DOLDURMA")
 
+# Neden Medyan?
+# -------------
+# Ortalama (mean) aykırı değerlere duyarlıdır. Özellikle Insulin gibi
+# sağa çarpık dağılımlarda medyan, merkezi eğilimi daha iyi temsil eder.
+# Ayrıca medyan, diğer 0 olmayan gözlemlerden hesaplandığı için
+# 0 değerlerinin kendisi hesaba katılmaz (bias önlemi).
+# FINAL_REPORT.md §2.1 Tablo'suna bakınız.
 df_clean = df.copy()
 median_vals = {}
 
 for col in ZERO_COLS:
-    # Yalnızca 0 OLMAYAN değerlerin medyanını al
+    # Yalnızca 0 OLMAYAN değerlerin medyanını al.
+    # Eğer tüm değerler dahil edilseydi, sıfırlar medyanı aşağı çekerdi.
     median_val = df_clean[col][df_clean[col] != 0].median()
     median_vals[col] = median_val
     filled_count = (df_clean[col] == 0).sum()
@@ -203,6 +289,10 @@ print((df_clean[ZERO_COLS] == 0).sum().to_string())
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 2B — ÖNCE / SONRA KARŞILAŞTIRMA GRAFİĞİ")
 
+# Bu grafik FINAL_REPORT.md §2.1'deki uyarıyı görselleştirir:
+# Insulin ve SkinThickness'ta çok yüksek oranla medyan uygulandığından
+# dağılımlarda yapay bir yoğunlaşma (spike) oluşur; bu durum söz konusu
+# değişkenlerin sonraki analizlerdeki güvenilirliğini azaltır.
 fig, axes = plt.subplots(2, 5, figsize=(22, 8))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("Medyan Doldurma Öncesi / Sonrası Karşılaştırma",
@@ -218,7 +308,7 @@ for i, col in enumerate(ZERO_COLS):
     axes[0, i].grid(axis="y")
     axes[0, i].legend(fontsize=7)
 
-    # Sonra
+    # Sonra: medyan noktasındaki dikey çizgi, doldurma değerini gösterir.
     axes[1, i].hist(df_clean[col], bins=30, color=color,
                     edgecolor=DARK_BG, linewidth=0.8, alpha=0.8)
     axes[1, i].axvline(median_vals[col], color=ACCENT2, linewidth=2,
@@ -235,10 +325,15 @@ save_fig("03_before_after_comparison.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 2C — KORELASYON ISI HARİTASI")
 
+# Pearson korelasyon matrisi: FINAL_REPORT.md §2.4'te yorumlanan
+# korelasyon değerleri buradan elde edilmiştir.
+# Öne çıkan bulgu: Glucose–Outcome korelasyonu (r≈+0.493) en yüksektir
+# ve bu tüm fazlarda tutarlı şekilde birinci sırada çıkar.
 fig, ax = plt.subplots(figsize=(11, 9))
 fig.patch.set_facecolor(DARK_BG)
 
 corr = df_clean.corr()
+# Alt üçgen maskesi: matrisin üst kısmı kaldırılır, tekrar eden değerler gizlenir.
 mask = np.triu(np.ones_like(corr, dtype=bool))
 
 cmap = sns.diverging_palette(220, 10, as_cmap=True)
@@ -261,10 +356,20 @@ save_fig("04_correlation_heatmap.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 3 — VERİYİ BÖLME (%70 / %15 / %15)")
 
+# Neden 3'e Bölme?
+# ----------------
+# Sadece train-test bölmesi "tek seferlik şans" riskine maruz kalır.
+# Validation seti, hiperparametre seçimi (örn. KNN'de K değeri, Faz 4-5)
+# için kullanılır; test seti yalnızca final değerlendirmede açılır.
+# Bu tasarım Faz 5'te bias-variance analizinde ve Faz 6'da CV
+# kıyaslamasında kritik bir rol oynar. (FINAL_REPORT.md §2.2)
+
 X = df_clean[FEATURE_COLS]
 y = df_clean[TARGET_COL]
 
 # 1. Adım: %85 Train+Val  |  %15 Test
+# ``stratify=y`` sınıf oranını (%34.9 pozitif) her sette korur;
+# bu sayede küçük test setinde şans eseri dengesizlik önlenir.
 X_trainval, X_test, y_trainval, y_test = train_test_split(
     X, y, test_size=0.15, random_state=42, stratify=y
 )
@@ -316,6 +421,7 @@ ax_pie.set_title("Veri Seti Bölünmesi", fontsize=12,
                  fontweight="bold", color=TEXT_COLOR, pad=14)
 
 # — Gruplu bar grafik (sınıf dengesi)
+# stratify=y sayesinde her sette pozitif oran ~%35'te tutulmuştur.
 ax_bar = fig.add_subplot(gs[1])
 ax_bar.set_facecolor(CARD_BG)
 set_names  = ["Train", "Val", "Test"]
@@ -348,13 +454,26 @@ save_fig("05_split_distribution.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 4 — STANDARDİZASYON (StandardScaler)")
 
+# Neden Sadece Train'e Fit?
+# -------------------------
+# StandardScaler z-skor dönüşümü uygular: z = (x - μ_train) / σ_train
+#
+# Scaler'ı train+val+test'e fit etmek "veri sızıntısı" (data leakage)
+# yaratır: model, test/val verilerinin istatistiklerini önceden "görmüş"
+# olur. Bu, genelleme performansını gerçekçi olmayan biçimde
+# şişirir. (FINAL_REPORT.md §2.3 — "Neden train'e fit?")
+#
+# Faz 3'teki kritik gözlem (FINAL_REPORT.md §4.2): α=0.1 gibi yüksek
+# öğrenme oranı bile ıraksamadı — çünkü Faz 1'de ölçeklendirme
+# yapıldı. Ölçeklenmemiş veride bu LR tipik olarak patlama yapardı.
 scaler = StandardScaler()
 
-# YALNIZCA Train üzerinde fit!
+# YALNIZCA Train üzerinde fit! → μ ve σ train'den öğrenilir.
 X_train_sc = pd.DataFrame(
     scaler.fit_transform(X_train),
     columns=FEATURE_COLS, index=X_train.index
 )
+# Val ve Test: sadece transform (fit değil) → veri sızıntısı yok.
 X_val_sc = pd.DataFrame(
     scaler.transform(X_val),
     columns=FEATURE_COLS, index=X_val.index
@@ -370,6 +489,7 @@ print("  " + "-" * 52)
 for col, mu, sig in zip(FEATURE_COLS, scaler.mean_, scaler.scale_):
     print(f"  {col:<28} {mu:>10.4f}  {sig:>10.4f}")
 
+# Başarılı dönüşüm sonrası Train ortalaması ≈0, std ≈1 olmalıdır.
 print("\n  Ölçeklenmiş Train → İstatistikler (yaklaşık μ≈0, σ≈1 beklenir):")
 print(X_train_sc.describe().loc[["mean", "std"]].round(4).to_string())
 
@@ -378,6 +498,11 @@ print(X_train_sc.describe().loc[["mean", "std"]].round(4).to_string())
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 4B — ÖLÇEKLENDİRME VİOLİN GRAFİĞİ")
 
+# Violin grafiği, ham verideki ölçek farklılıklarını (örn. Glucose ~120,
+# Pregnancies ~3) netçe gösterir. Ölçekleme sonrası tüm özellikler
+# aynı z-skor ekseni üzerinde karşılaştırılabilir hale gelir.
+# KNN gibi mesafe tabanlı algoritmalar için bu kritiktir:
+# büyük ölçekli özellik küçük ölçeklileri ezip "baskın" hale gelir.
 fig, axes = plt.subplots(1, 2, figsize=(20, 7))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("StandardScaler — Ölçeklendirme Öncesi / Sonrası (Train Seti)",
@@ -401,7 +526,7 @@ axes[0].set_title("Ölçeklendirme Öncesi", fontsize=12, pad=10)
 axes[0].set_ylabel("Değer", fontsize=10)
 axes[0].grid(axis="y")
 
-# Sonra
+# Sonra: tüm özellikler μ≈0 çevresinde, σ≈1 genişliğinde toplanır.
 data_after = [X_train_sc[c].values for c in FEATURE_COLS]
 vp2 = axes[1].violinplot(data_after, showmedians=True,
                           showextrema=True)
@@ -417,6 +542,7 @@ axes[1].set_xticks(range(1, len(FEATURE_COLS) + 1))
 axes[1].set_xticklabels(FEATURE_COLS, rotation=30, ha="right", fontsize=9)
 axes[1].set_title("Ölçeklendirme Sonrası (z-score)", fontsize=12, pad=10)
 axes[1].set_ylabel("Z-Skoru", fontsize=10)
+# μ=0 referans çizgisi: tüm özelliklerin ortalamadan sapmasını görselleştirir.
 axes[1].axhline(0, color=ACCENT3, linewidth=1, linestyle="--", alpha=0.6)
 axes[1].grid(axis="y")
 
@@ -428,6 +554,9 @@ save_fig("06_scaling_violin.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 4C — ÖLÇEKLENMİŞ SET KARŞILAŞTIRMASI (BOX-PLOT)")
 
+# Train/Val/Test box-plotları: üç setin dağılımının benzer olması,
+# stratifiye bölmenin başarılı olduğunun kanıtıdır.
+# Büyük farklılıklar veri sızıntısına veya temsiliyet sorununa işaret eder.
 fig, axes = plt.subplots(2, 4, figsize=(20, 9))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("Ölçeklenmiş Değerler — Train / Val / Test Karşılaştırması",
@@ -453,6 +582,7 @@ for i, (col, ax) in enumerate(zip(FEATURE_COLS, axes.flatten())):
     ax.set_xticklabels(set_labels, fontsize=9)
     ax.set_title(col, fontsize=10, pad=6)
     ax.set_ylabel("Z-Skoru", fontsize=8)
+    # μ=0 referans: her özelliğin train ortalamasının sıfır olduğunu doğrular.
     ax.axhline(0, color=ACCENT3, linewidth=0.8, linestyle="--", alpha=0.5)
     ax.grid(axis="y")
 
@@ -464,10 +594,17 @@ save_fig("07_scaled_boxplots.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 4D — PAIR PLOT (Ölçeklenmiş Train Seti)")
 
+# Pair plot, Faz 4'te anlamlı bulunan değişkenlerin (Glucose, BMI,
+# Age, DiabetesPedigreeFunction) ikili ilişkilerini ve sınıflar
+# arası ayrışmayı görselleştirir.
+# → FINAL_REPORT.md §5.1 ve §9.1'de yorumlanan katsayılar bu
+#   görsel ön keşifle tutarlıdır.
 train_plot = X_train_sc.copy()
 train_plot["Outcome"] = y_train.values
 
-# Yalnızca 4 en önemli özelliği seç (okunabilirlik)
+# Yalnızca 4 en önemli özelliği seç (okunabilirlik).
+# Bu seçim korelasyon analizine (FINAL_REPORT.md §2.4) dayanmaktadır:
+# Glucose (r=0.493), BMI (r=0.312), Age (r=0.238), DPF (r=0.173).
 TOP4 = ["Glucose", "BMI", "Age", "DiabetesPedigreeFunction"]
 
 g = sns.pairplot(
@@ -496,6 +633,12 @@ save_fig("08_pair_plot.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 5 — TEMİZ VERİLERİ CSV OLARAK KAYDET")
 
+# İki farklı format kaydedilir:
+# 1. Ham (raw): Medyan doldurulmuş ama ölçeklenmemiş → Faz 2'nin girdisi
+#    (Faz 2 kendi ölçeklendirmesini yapar çünkü hedef değişken BMI'dır).
+# 2. Ölçeklenmiş (scaled): z-skor dönüşümlü → Faz 3, 4, 5, 6, 7'nin girdisi
+#    (sınıflandırma ve gradient descent analizleri için).
+
 # Ham (doldurulmuş ama ölçeklenmemiş) setler
 train_raw = X_train.copy(); train_raw[TARGET_COL] = y_train
 val_raw   = X_val.copy();   val_raw[TARGET_COL]   = y_val
@@ -505,7 +648,8 @@ train_raw.to_csv(os.path.join(OUTPUT_DIR, "train_raw.csv"), index=False)
 val_raw.to_csv(os.path.join(OUTPUT_DIR, "val_raw.csv"),     index=False)
 test_raw.to_csv(os.path.join(OUTPUT_DIR, "test_raw.csv"),   index=False)
 
-# Ölçeklenmiş setler
+# Ölçeklenmiş setler: index=False çünkü indeks sütunu sonraki
+# fazlarda FEATURE_COLS listesiyle çakışmaya neden olabilir.
 train_sc = X_train_sc.copy(); train_sc[TARGET_COL] = y_train.values
 val_sc   = X_val_sc.copy();   val_sc[TARGET_COL]   = y_val.values
 test_sc  = X_test_sc.copy();  test_sc[TARGET_COL]  = y_test.values
@@ -526,6 +670,9 @@ for fname in ["train_raw.csv", "val_raw.csv", "test_raw.csv",
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 6 — ÖZET DASHBOARD")
 
+# Bu dashboard tek bir görselde Faz 1'in tüm bulgularını özetler:
+# 0 değerleri, sınıf dengesi, set boyutları, medyanlar ve
+# ölçeklenmiş özellik dağılımları (Outcome'a göre ayrılmış).
 fig = plt.figure(figsize=(22, 12))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("FAZ 1 — VERİ ÖN İŞLEME ÖZET DASHBOARD",
@@ -546,6 +693,8 @@ ax1.set_title("Doldurulan\n0 Değerleri", fontsize=10, fontweight="bold")
 ax1.grid(axis="x")
 
 # — Panel 2: Sınıf dengesi (tam veri)
+# %34.9 pozitif oran — hafif dengesizlik, sonraki fazlarda
+# Recall ve F1 üzerinde baskı oluşturur. (FINAL_REPORT.md §9.4)
 ax2 = fig.add_subplot(gs[0, 1])
 ax2.set_facecolor(CARD_BG)
 cls_counts = df_clean[TARGET_COL].value_counts().sort_index()
@@ -577,6 +726,8 @@ ax4.set_title("Doldurmada\nKullanılan Medyanlar", fontsize=10, fontweight="bold
 ax4.grid(axis="x")
 
 # — Panel 5-8: Ölçeklenmiş özellik dağılımları (Outcome bazlı)
+# Glucose ve BMI'nın iki sınıf arasındaki ayrışması en belirgindir;
+# bu, FINAL_REPORT.md §5.1'deki katsayı analizinin görsel karşılığıdır.
 for i, col in enumerate(["Glucose", "BMI", "Age", "Insulin"]):
     ax = fig.add_subplot(gs[1, i])
     ax.set_facecolor(CARD_BG)

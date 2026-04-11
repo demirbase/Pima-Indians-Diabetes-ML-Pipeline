@@ -1,8 +1,58 @@
 """
 =============================================================
-  FAZ 5: YANLIYIK ve VARYANS (Bias-Variance Trade-off)
+  FAZ 5: YANLILIK ve VARYANS (Bias-Variance Trade-off)
   KNN modeli üzerinden K=1…50 arası hata analizi
 =============================================================
+
+Modül Amacı
+-----------
+  Bu modül, K-En Yakın Komşu (KNN) sınıflandırıcısı üzerinden
+  Bias-Variance Trade-off'u ampirik olarak analiz eder.
+  K=1'den K=50'ye tüm değerler taranır; her K için Train, Val
+  ve Test hata oranları ile AUC hesaplanır.
+
+  Ek olarak Bootstrap (B=30) ile Bias² ve Varyans bileşenleri
+  ayrıştırılır ve görselleştirilir.
+
+  Sonuçlar Logistik Regresyon ve GNB referans hatalarıyla kıyaslanır.
+
+Teorik Arka Plan
+----------------
+  Toplam Beklenen Hata Ayrışımı:
+    E[(y−ŷ)²] = Bias²(ŷ) + Var(ŷ) + σ²_noise
+
+  K'nın etkisi:
+    K=1  → Model çok karmaşık (her noktanın kendi komşusu kendisidir)
+            Train Error ≈ 0 → Yüksek Varyans (Overfit)
+    K=50 → Model çok basit (50 komşunun çoğunluk oylaması)
+            Sınır düzleşir → Yüksek Yanlılık (Underfit)
+    Optimal K → Bias² + Varyans toplamının minimum olduğu nokta
+
+  K ve Model Karmaşıklığı:
+    Küçük K → yüksek karmaşıklık (serpiştirilmiş sınır)
+    Büyük K → düşük karmaşıklık (düzgün sınır)
+    Model Complexity ∝ 1/K  (kullanılan gösterge metrik)
+
+  Bootstrap Bias-Variance Ayrışımı:
+    B bootstrap örneklemi çekilir; her biri için f_b(x) tahmin edilir.
+    Bias²  ≈ (E_B[f_b(x)] − y)²   (ortalama tahmin − gerçek)
+    Varyans ≈ E_B[(f_b(x) − E_B[f_b(x)])²]  (tahminler arası saçılma)
+
+  Pima bulguları (FINAL_REPORT.md §7):
+    Optimal K = 26 (Val hata min.)
+    K=1:  Train Err ≈ 0.000, Test Err ≈ 0.287 → Yüksek Varyans
+    K=50: Train Err ≈ 0.281, Test Err ≈ 0.296 → Yüksek Yanlılık
+
+Girdiler
+--------
+  phase1_outputs/train_scaled.csv
+  phase1_outputs/val_scaled.csv
+  phase1_outputs/test_scaled.csv
+
+Çıktılar
+--------
+  phase5_outputs/error_vs_k.csv   – K bazlı hata ve AUC değerleri
+  phase5_outputs/*.png             – 6 adet görselleştirme
 """
 import numpy as np
 import pandas as pd
@@ -19,9 +69,12 @@ from sklearn.naive_bayes  import GaussianNB
 warnings.filterwarnings("ignore")
 
 # ── KOYU TEMA ──────────────────────────────────────────────
-DARK="#0d1117"; CARD="#161b22"; GRID="#21262d"
+DARK="#0d1117"; CARD="##161b22"; GRID="#21262d"
 C1="#58a6ff"; C2="#3fb950"; C3="#ff7b72"
 C4="#d2a8ff"; C5="#ffa657"; C6="#79c0ff"; TXT="#c9d1d9"
+
+# Tema renk sabiti tutarlılık için CARD_BG olarak da tanımlanır.
+CARD = "#161b22"
 
 plt.rcParams.update({
     "figure.facecolor": DARK, "axes.facecolor": CARD,
@@ -36,6 +89,7 @@ plt.rcParams.update({
 OUT = "phase5_outputs"; os.makedirs(OUT, exist_ok=True)
 
 def save(fname):
+    """Figürü OUTPUT_DIR altına kaydeder ve kapatır."""
     plt.savefig(f"{OUT}/{fname}", bbox_inches="tight", facecolor=DARK, dpi=150)
     plt.close(); print(f"  ✅  → {OUT}/{fname}")
 
@@ -61,12 +115,16 @@ print(f"  Train={len(y_tr)} | Val={len(y_va)} | Test={len(y_te)}")
 # ════════════════════════════════════════════════════════════
 hdr("ADIM 1 — K=1…50 HATA HESAPLAMASI")
 
+# Hata = 1 − Accuracy (sınıflandırma hatası)
+# K değiştikçe Train, Val ve Test hatalarının nasıl değiştiği izlenir.
+# FINAL_REPORT.md §7.1'deki temel bulgular bu döngüden elde edilmiştir.
 K_MAX = 50
 K_RANGE = range(1, K_MAX + 1)
 
 train_err, val_err, test_err = [], [], []
 train_acc, val_acc,  test_acc  = [], [], []
 train_auc, test_auc  = [], []
+# 1/K: model karmaşıklığının tersi; K büyüdükçe model daha basit.
 complexity = []   # 1/K (model karmaşıklığı göstergesi)
 
 for k in K_RANGE:
@@ -84,6 +142,8 @@ for k in K_RANGE:
     train_acc.append(1 - tr_err)
     val_acc.append(1 - va_err)
     test_acc.append(1 - te_err)
+    # AUC: olasılık tahminine dayalı olduğundan accuracy'ye göre
+    # daha dirençlidir; K değişimine daha smooth tepki verir.
     train_auc.append(roc_auc_score(y_tr, knn.predict_proba(X_tr)[:,1]))
     test_auc.append(roc_auc_score(y_te,  knn.predict_proba(X_te)[:,1]))
     complexity.append(1 / k)
@@ -93,6 +153,8 @@ test_err  = np.array(test_err)
 train_acc = np.array(train_acc); val_acc = np.array(val_acc)
 test_acc  = np.array(test_acc)
 
+# Val hatasının minimum olduğu K → hiperparametre seçim kriteri.
+# Bu değer gerçek test setini görmeksizin belirlenir → correct procedure.
 best_k_val  = list(K_RANGE)[np.argmin(val_err)]
 best_k_test = list(K_RANGE)[np.argmin(test_err)]
 
@@ -131,11 +193,12 @@ ax.plot(ks, test_err,  color=C3, lw=2.5, marker="D",
         ms=3, linestyle="-.", label="Test Error", zorder=4)
 
 # Overfit bölgesi (K küçük — yüksek varyans)
+# K=1'de Train Error ≈ 0 → model eğitim setini ezberliyor.
 ax.axvspan(1, 5, alpha=0.10, color=C3, label="Overfit Bölgesi (Yüksek Varyans)")
 # Underfit bölgesi (K büyük — yüksek yanlılık)
 ax.axvspan(35, 50, alpha=0.10, color=C4, label="Underfit Bölgesi (Yüksek Yanlılık)")
 
-# Optimum nokta
+# Optimum nokta: Val hatasının minimize edildiği K
 opt_te = test_err[best_k_test - 1]
 ax.axvline(best_k_val, color=C5, lw=2, linestyle=":",
            label=f"Opt. K={best_k_val} (Val)", zorder=5)
@@ -160,8 +223,9 @@ ax.set_xticks(list(range(0, 51, 5)))
 ax.legend(fontsize=8, loc="upper right"); ax.grid(True)
 
 # ─ Panel B: Bias-Variance teorik görselleştirme ───────────
+# Smooth versiyonlar Gaussian filtresiyle elde edilir;
+# bu sayede K'ya göre trend daha net görünür.
 ax2 = axes[1]; ax2.set_facecolor(CARD)
-# Smoothed versiyonlar
 from scipy.ndimage import gaussian_filter1d
 sm_tr   = gaussian_filter1d(train_err, sigma=1.5)
 sm_va   = gaussian_filter1d(val_err,   sigma=1.5)
@@ -171,6 +235,7 @@ ax2.fill_between(ks, sm_tr, alpha=0.18, color=C2)
 ax2.fill_between(ks, sm_te, alpha=0.12, color=C3)
 ax2.plot(ks, sm_tr, color=C2, lw=2.5, label="Train Error (smoothed)")
 ax2.plot(ks, sm_te, color=C3, lw=2.5, label="Test Error  (smoothed)")
+# Test − Train farkı → Varyans göstergesi: büyük fark → yüksek varyans
 ax2.plot(ks, sm_te - sm_tr, color=C4, lw=1.8,
          linestyle=":", label="|Test - Train| = Varyans Göstergesi")
 
@@ -203,6 +268,10 @@ plt.tight_layout(); save("01_error_vs_k.png")
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 2 — AUC vs. K")
 
+# AUC, sınıflandırma eşiğinden (0.5) bağımsız olarak tüm
+# eşikler üzerindeki ayrımcılık gücünü ölçer.
+# Accuracy'ye göre daha sağlam bir metrik; özellikle
+# dengesiz sınıflarda tercih edilir. (FINAL_REPORT.md §7.1)
 fig, ax = plt.subplots(figsize=(15, 6))
 fig.patch.set_facecolor(DARK); ax.set_facecolor(CARD)
 ax.fill_between(ks, test_auc, alpha=0.15, color=C1)
@@ -226,7 +295,12 @@ plt.tight_layout(); save("02_auc_vs_k.png")
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 3 — BIAS² & VARIANCE AYRIŞIMI")
 
-# Bootstrap ile bias² ve varyans tahmini
+# Bootstrap estimasyon prosedürü:
+# 1. Her K için B=30 bootstrap örneklemi çekiliyor.
+# 2. Her bootstrap modelinin test tahminleri saklanıyor.
+# 3. Bias² = (ortalama tahmin − gerçek)²  hesaplanıyor.
+# 4. Varyans = bootstrap tahminleri arasındaki saçılma
+# Bu yaklaşım FINAL_REPORT.md §7.2'deki ayrışım analizinin kaynağıdır.
 N_BOOTSTRAP = 30
 rng = np.random.default_rng(42)
 K_SAMPLE = [1, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50]
@@ -236,16 +310,19 @@ bias2_list, var_list, total_err_list = [], [], []
 for k in K_SAMPLE:
     preds = []
     for _ in range(N_BOOTSTRAP):
+        # Yerine koyarak (with replacement) bootstrap örneklemesi
         idx  = rng.integers(0, len(X_tr), size=len(X_tr))
         knn_ = KNeighborsClassifier(n_neighbors=k, metric="euclidean")
         knn_.fit(X_tr[idx], y_tr[idx])
+        # Olasılık tahmini: (n_test,) boyutunda P(y=1) vektörü
         preds.append(knn_.predict_proba(X_te)[:, 1])
     preds = np.array(preds)               # (N_BOOTSTRAP, n_test)
+    # Bootstrap replicaları üzerinden ortalama tahmin
     mean_pred = preds.mean(axis=0)
 
-    # Bias² ≈ MSE(E[f(x)], y)
+    # Bias² ≈ MSE(E[f(x)], y): ortalama tahmin ne kadar yanılıyor?
     bias2 = np.mean((mean_pred - y_te) ** 2)
-    # Variance ≈ E[MSE(f(x), E[f(x)])]
+    # Varyans ≈ E[MSE(f(x), E[f(x)])]: tahminler ne kadar değişken?
     var   = np.mean(np.var(preds, axis=0))
     total_err_list.append(bias2 + var)
     bias2_list.append(bias2)
@@ -300,10 +377,13 @@ plt.tight_layout(); save("03_bias_variance_decomposition.png")
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 4 — KARAR SINIRI (K=1 vs K=opt vs K=50)")
 
+# Karar sınırı yalnızca 2 boyutta görselleştirilebilir;
+# bu yüzden Glucose ve BMI seçilmiştir (en yüksek katsayılı özellikler).
+# Gerçek 8-boyutlu karar sınırı bu projeksiyondan daha karmaşıktır.
 feat_idx = [FEAT.index("Glucose"), FEAT.index("BMI")]
 X2_tr = X_tr[:, feat_idx]; X2_te = X_te[:, feat_idx]
 
-h = 0.04
+h = 0.04   # Meshgrid çözünürlüğü; daha küçük → daha net sınır, daha yavaş
 x_min, x_max = X2_tr[:,0].min()-0.5, X2_tr[:,0].max()+0.5
 y_min, y_max = X2_tr[:,1].min()-0.5, X2_tr[:,1].max()+0.5
 xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
@@ -322,10 +402,13 @@ for ax, k, title_k in zip(axes,
     ax.set_facecolor(CARD)
     knn2 = KNeighborsClassifier(n_neighbors=k, metric="euclidean")
     knn2.fit(X2_tr, y_tr)
+    # Tüm meshgrid noktaları için tahmin → karar bölgelerini doldurur
     Z = knn2.predict(np.c_[xx.ravel(), yy.ravel()]).reshape(xx.shape)
 
+    # Karar bölgesi renklendirmesi: mavi=negatif, kırmızı=pozitif
     ax.contourf(xx, yy, Z, alpha=0.35,
                 cmap=plt.cm.RdBu, levels=[-0.5, 0.5, 1.5])
+    # Karar sınırı çizgisi
     ax.contour(xx, yy, Z, levels=[0.5], colors=[C5],
                linewidths=1.8)
 
@@ -351,7 +434,10 @@ plt.tight_layout(); save("04_decision_boundary.png")
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 5 — TÜM MODEL KARŞILAŞTIRMASI")
 
-# Diğer modellerin sabit hataları
+# KNN hata eğrisi, LR ve GNB'nin sabit test hatasıyla kıyaslanır.
+# LR ve GNB, K'ya bağımlı olmayan parametrik modellerdir;
+# sabit bir hata verirler. Bu karşılaştırma, KNN'nin optimum
+# K değerinde ne kadar rekabetçi olduğunu gösterir.
 lr   = LogisticRegression(max_iter=5000, C=1e6, random_state=42)
 gnb  = GaussianNB()
 lr.fit(X_tr, y_tr); gnb.fit(X_tr, y_tr)
@@ -432,6 +518,7 @@ ax1.text(44, max(test_err)*0.97, "Underfit\n(Yüksek Bias)",
 ax1.legend(fontsize=9); ax1.grid(True)
 
 # P2: Bias-Var pasta (Opt K)
+# Opt K'da Bias² ve Varyans'ın göreceli ağırlıkları
 ax2 = fig.add_subplot(gs[0, 2]); ax2.set_facecolor(CARD)
 opt_b2  = bias2_list[K_SAMPLE.index(K_SAMPLE[opt_idx])]
 opt_var = var_list[K_SAMPLE.index(K_SAMPLE[opt_idx])]

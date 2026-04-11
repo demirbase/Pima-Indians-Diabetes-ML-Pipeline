@@ -4,7 +4,67 @@
   • Lojistik Regresyon (sklearn + scipy z/p istatistikleri)
   • KNN (K=1…20, Öklid mesafesi)
   • Gaussian Naive Bayes
-============================================================="""
+=============================================================
+
+Modül Amacı
+-----------
+  Bu modül üç farklı sınıflandırıcıyı (Lojistik Regresyon,
+  K-En Yakın Komşu ve Gaussian Naive Bayes) karşılaştırır.
+  LR için Fisher Information matrisinden türetilen z-istatistikleri
+  ve p-değerleri hesaplanır; bu değerler hangi özelliklerin
+  diyabetle istatistiksel olarak anlamlı ilişkisi olduğunu gösterir.
+  KNN'de K=1...20 taranarak overfitting-underfitting geçişi
+  (Faz 5'in ön gösterimi) gözlemlenir.
+
+Teorik Arka Plan
+----------------
+  Lojistik Regresyon — Fisher Information Matrisi:
+    σ(z) = 1 / (1 + e⁻ᶻ),  z = Xβ
+    W = diag[σ(Xβ)·(1−σ(Xβ))]  ← ağırlık matrisi
+    I(β) = XᵀWX  ← Fisher Information Matrisi
+    Cov(β̂) = [I(β)]⁻¹ = (XᵀWX)⁻¹
+
+  Z istatistiği ve p-değeri:
+    Z = β̂ / SE(β̂),  SE = √diag[(XᵀWX)⁻¹]
+    p = 2·P(Z > |z_obs|)  ← çift kuyruklu normal test
+    α = 0.05 → |Z| > 1.96 ise H₀ (β=0) reddedilir
+
+  Yorumlama:
+    β > 0 → o özellik diyabet olasılığını artırır
+    Odds Oranı = exp(β): 1 birim artış β'nın kaç kat arttırdığı
+
+  KNN — Öklid Mesafesi:
+    d(x,y) = √Σ(xₖ − yₖ)²
+    Küçük K → yüksek varyans (overfitting), Büyük K → yüksek bias (underfitting)
+    (Faz 5'te derinlemesine analiz → FINAL_REPORT.md §5.2)
+
+  GNB — Naive Bayes Varsayımı:
+    P(y|x) ∝ P(y) · Π P(xᵢ|y)
+    P(xᵢ|y) ~ N(μ_{iy}, σ²_{iy})  (Gaussian varsayımı)
+    "Naive": özellikler birbirinden koşullu bağımsız kabul edilir.
+    Bu varsayım gerçekte ihlal edilir (korelasyon var), ama
+    GNB genellikle iyi genelleşir. (FINAL_REPORT.md §6.2)
+
+Neden Anlamlı Bulunan Değişkenler?
+----------------------------------
+  Faz 4 çıktısı (p<0.05): Glucose, BMI, DiabetesPedigreeFunction,
+  Age, Pregnancies. (FINAL_REPORT.md §5.1)
+  Anlamsız bulunanlar: BloodPressure, SkinThickness, Insulin.
+  Insulin'in anlamsızlığı, Faz 1'deki yüksek impütasyon oranı
+  (%48.7) ile açıklanabilir. (FINAL_REPORT.md §9.2)
+
+Girdiler
+--------
+  phase1_outputs/train_scaled.csv
+  phase1_outputs/val_scaled.csv
+  phase1_outputs/test_scaled.csv
+
+Çıktılar
+--------
+  phase4_outputs/logistic_stats.csv    – β, Z, p, CI, OR tablosu
+  phase4_outputs/model_comparison.csv  – LR, KNN, GNB metrikleri
+  phase4_outputs/*.png                 – 7 adet görselleştirme
+"""
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -41,6 +101,7 @@ plt.rcParams.update({
 OUT = "phase4_outputs"; os.makedirs(OUT, exist_ok=True)
 
 def save(fname):
+    """Figürü OUTPUT_DIR altına kaydeder ve kapatır."""
     plt.savefig(f"{OUT}/{fname}", bbox_inches="tight", facecolor=DARK, dpi=150)
     plt.close(); print(f"  ✅  → {OUT}/{fname}")
 
@@ -48,6 +109,8 @@ def hdr(t): print(f"\n{'═'*62}\n  {t}\n{'═'*62}")
 
 # ── VERİ ───────────────────────────────────────────────────
 hdr("ADIM 0 — VERİ YÜKLEME")
+# Faz 1 ölçeklenmiş setler; tüm sınıflandırıcılar z-skor normalizasyonuna
+# ihtiyaç duyar. KNN özellikle mesafeye duyarlıdır — FINAL_REPORT.md §5.2.
 train = pd.read_csv("phase1_outputs/train_scaled.csv")
 val   = pd.read_csv("phase1_outputs/val_scaled.csv")
 test  = pd.read_csv("phase1_outputs/test_scaled.csv")
@@ -64,7 +127,9 @@ print(f"  Train={len(y_tr)}  Val={len(y_va)}  Test={len(y_te)}")
 # ════════════════════════════════════════════════════════════
 hdr("A — LOJİSTİK REGRESYON (sklearn + scipy istatistikleri)")
 
-# sklearn ile fit et
+# C=1e6 → çok zayıf L2 düzenleştirme (neredeyse saf MLE).
+# Bu sayede katsayılar Faz 3'teki Gradient Descent sonuçlarıyla
+# karşılaştırılabilir. (FINAL_REPORT.md §5.1)
 sk_lr_stats = LogisticRegression(max_iter=5000, C=1e6, random_state=42)
 sk_lr_stats.fit(X_tr, y_tr)
 
@@ -72,20 +137,35 @@ coef_names = ["intercept"] + FEAT
 coefs      = np.concatenate([[sk_lr_stats.intercept_[0]], sk_lr_stats.coef_[0]])
 
 # Fisher Information Matrix → std hataları
-X_aug   = np.hstack([np.ones((len(X_tr),1)), X_tr])
-y_hat   = sigmoid_fn(X_aug @ coefs)
-W_diag  = y_hat * (1 - y_hat)           # ağırlık matrisi diyagoneli
+# ─────────────────────────────────────────────────────────
+# Lojistik loglardaki ikinci türev negatif olmak koşuluyla
+# Hessian = −XᵀWX olur. Fisher Information ise beklenen
+# negatif Hessian = XᵀWX 'dir.
+# SE(β̂ᵢ) = √[(XᵀWX)⁻¹]ᵢᵢ
+# W diyagonel matrisi: Wᵢᵢ = σ(zᵢ)·(1−σ(zᵢ))
+# Bu değer, sigmoid çıktısının varyansına karşılık gelir.
+# ─────────────────────────────────────────────────────────
+X_aug   = np.hstack([np.ones((len(X_tr),1)), X_tr])   # (n, p+1)
+y_hat   = sigmoid_fn(X_aug @ coefs)                    # (n,): σ(Xβ)
+W_diag  = y_hat * (1 - y_hat)                          # (n,): Wᵢᵢ = σ(1−σ)
+# XᵀWX: (p+1,n) @ (n,p+1) → (p+1,p+1)
 XTWX    = X_aug.T @ (W_diag[:, None] * X_aug)
 try:
-    cov_mat  = np.linalg.inv(XTWX)
-    std_errs = np.sqrt(np.diag(cov_mat))
+    cov_mat  = np.linalg.inv(XTWX)       # Kovaryans matrisi (XᵀWX)⁻¹
+    std_errs = np.sqrt(np.diag(cov_mat)) # SE = √diag
 except np.linalg.LinAlgError:
+    # Matris tekil (singular) ise SE hesaplanamaz → NaN
     std_errs = np.full_like(coefs, np.nan)
 
+# z = β̂/SE → standart normal dağılım altında test istatistiği
 z_stats     = coefs / (std_errs + 1e-15)
+# Çift kuyruklu p-değeri: P(|Z| > |z_obs|) = 2·(1 − Φ(|z|))
 p_values    = 2 * (1 - sp_stats.norm.cdf(np.abs(z_stats)))
+# %95 güven aralığı: β ± 1.96·SE  (normal asimptotik yaklaşım)
 conf_lo     = coefs - 1.96 * std_errs
 conf_hi     = coefs + 1.96 * std_errs
+# Odds Ratio: exp(β); β→OR dönüşümü.
+# OR = 3.0 → o özellik 1 birim arttığında diyabet odds'u 3 kat artar.
 odds_ratios = np.exp(coefs)
 
 n_params = len(coefs)
@@ -120,7 +200,7 @@ fig.suptitle("Lojistik Regresyon — İstatistiksel Özet", fontsize=14,
 
 feat_only = df_stats.iloc[1:]  # intercept hariç
 
-# Panel 1 – Z istatistikleri
+# Panel 1 – Z istatistikleri: |Z| > 1.96 ise anlamlı (α=0.05)
 ax = axes[0]; ax.set_facecolor(CARD)
 colors_z = [C2 if v > 0 else C3 for v in feat_only["Z-ist."]]
 bars = ax.barh(feat_only["Parametre"], feat_only["Z-ist."],
@@ -132,6 +212,7 @@ ax.set_title("Z-İstatistiği", fontsize=11, pad=8, fontweight="bold")
 ax.set_xlabel("Z", fontsize=9); ax.legend(fontsize=8); ax.grid(axis="x")
 
 # Panel 2 – p-değerleri (log ölçeği)
+# p < 0.05 olan barlar yeşil; log ölçeği küçük p-değerlerini görünür kılar.
 ax = axes[1]; ax.set_facecolor(CARD)
 p_colors = [C2 if p < 0.05 else C3 for p in feat_only["p-değeri"]]
 ax.barh(feat_only["Parametre"], feat_only["p-değeri"],
@@ -145,6 +226,7 @@ for i, (p, name) in enumerate(zip(feat_only["p-değeri"], feat_only["Parametre"]
         ax.text(p * 1.05, i, "★", va="center", fontsize=11, color=C5)
 
 # Panel 3 – Odds oranları (log-odds görselleştirilmiş)
+# OR > 1 → artan risk; OR < 1 → azalan risk; OR = 1 → etkisiz.
 ax = axes[2]; ax.set_facecolor(CARD)
 ors = feat_only["Odds Oranı"]
 or_colors = [C2 if v > 1 else C3 for v in ors]
@@ -160,6 +242,8 @@ for bar, v in zip(ax.patches, ors):
 plt.tight_layout(); save("01_logistic_stats.png")
 
 # ── GRAFİK 2: Güven Aralıkları (forest plot) ───────────────
+# Forest plot: her katsayı için %95 CI gösterilir.
+# CI sıfır içermiyorsa (yeşil çizgi) → anlamlı (p<0.05).
 fig, ax = plt.subplots(figsize=(12, 7))
 fig.patch.set_facecolor(DARK); ax.set_facecolor(CARD)
 y_pos = range(len(feat_only))
@@ -185,6 +269,10 @@ plt.tight_layout(); save("02_forest_plot.png")
 
 # Log-odds yorumu yazdır
 hdr("LOG-ODDS YORUMU")
+# Lojistik regresyon katsayısı log-odds değişimini ifade eder.
+# Örnek: Glucose β=+1.05 → 1 birim z-skor artışı → log-odds 1.05 artar
+#                        → odds exp(1.05)=2.86× büyür
+# FINAL_REPORT.md §5.1 tablo yorumları buradan türetilmiştir.
 sig_feats = df_stats[df_stats["Anlamlı"] & (df_stats["Parametre"] != "intercept")]
 for _, row in sig_feats.iterrows():
     direction = "artırır" if row["Katsayı"] > 0 else "azaltır"
@@ -198,6 +286,11 @@ for _, row in sig_feats.iterrows():
 # ════════════════════════════════════════════════════════════
 hdr("B — KNN (K=1…20, Öklid)")
 
+# K=1: Her test noktası en yakın komşuya atanır → eğitim verisini ezberler
+#       → Train Error ≈ 0, Val Error yüksek → Overfit (Yüksek Varyans)
+# K=20: Daha geniş komşuluk → sınır düzleşir → Underfit riski
+# Optimum K: Validation hatası minimum, Faz 5'te 1→50 arasında taranır.
+# FINAL_REPORT.md §5.2 ve Faz 5 bulguları: Optimal K=26.
 K_RANGE = range(1, 21)
 knn_val_acc, knn_test_acc, knn_auc = [], [], []
 
@@ -246,6 +339,10 @@ ax.set_xticks(list(K_RANGE)); ax.legend(fontsize=9); ax.grid(True)
 plt.tight_layout(); save("03_knn_k_analysis.png")
 
 # ── GRAFİK 4: KNN Underfitting / Overfitting ───────────────
+# K=1: Train Err ≈ 0.0 (model her train noktasını mükemmel sınıflandırır)
+#       ama Val/Test'te yüksek hata → aşırı öğrenme (overfit).
+# Bu grafik bias-variance trade-off'un 1→20 aralığındaki özetini sunar.
+# Faz 5'te K=1→50 aralığı daha kapsamlı incelenir.
 fig, ax = plt.subplots(figsize=(14, 6))
 fig.patch.set_facecolor(DARK); ax.set_facecolor(CARD)
 train_acc_k = []
@@ -258,6 +355,7 @@ ax.plot(K_RANGE, train_acc_k,  color=C2, lw=2, marker="o", ms=4, label="Train Ac
 ax.plot(K_RANGE, knn_val_acc,  color=C1, lw=2, marker="s", ms=4, label="Val Acc")
 ax.plot(K_RANGE, knn_test_acc, color=C3, lw=2, marker="D", ms=4, label="Test Acc", ls="--")
 ax.axvline(best_k, color=C5, lw=2, ls=":", label=f"Best K={best_k}")
+# Trampa farkı: Train Acc - Val Acc büyükse overfitting var demektir.
 ax.fill_between(K_RANGE,
                 [t - v for t, v in zip(train_acc_k, knn_val_acc)],
                 0, alpha=0.08, color=C4, label="Overfitting Farkı")
@@ -272,6 +370,11 @@ plt.tight_layout(); save("04_knn_bias_variance.png")
 # ════════════════════════════════════════════════════════════
 hdr("C — GAUSSIAN NAIVE BAYES")
 
+# GNB, her özelliğin her sınıf için Gaussian dağıldığını varsayar.
+# Eğitim aşamasında yalnızca her sınıfın μᵢ ve σᵢ değerleri öğrenilir.
+# Tahmin: argmax_y [log P(y) + Σ log N(xᵢ; μᵢy, σ²ᵢy)]
+# "Naive" çünkü özellikler koşullu bağımsız kabul edilir;
+# bu varsayım Pima veri setinde kısmen ihlal edilir.
 gnb = GaussianNB()
 gnb.fit(X_tr, y_tr)
 gnb_val_pred   = gnb.predict(X_va)
@@ -288,6 +391,9 @@ print(f"\n  GNB Val  Acc={gnb_val_acc:.4f}  AUC={gnb_val_auc:.4f}")
 print(f"  GNB Test Acc={gnb_test_acc:.4f}  AUC={gnb_test_auc:.4f}")
 
 # Normal dağılım varsayımı görselleştirmesi
+# gnb.theta_: GNB'nin sınıf bazlı öğrendiği μ değerleri
+# gnb.var_:   GNB'nin öğrendiği σ² değerleri
+# Her panel: histogram (gerçek dağılım) + gestrichelte Gauss eğrisi (varsayım)
 fig, axes = plt.subplots(2, 4, figsize=(22, 9))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("Gaussian Naive Bayes — Özellik Dağılımları (Sınıf Bazlı)",
@@ -301,7 +407,7 @@ for i, (feat, ax) in enumerate(zip(FEAT, axes.flatten())):
         vals = x_all[y_all == cls, i]
         ax.hist(vals, bins=22, color=clr, alpha=0.55,
                 edgecolor=DARK, linewidth=0.6, density=True, label=lbl)
-        # GNB'nin öğrendiği Gaussian
+        # GNB'nin öğrendiği Gaussian eğrisi (kesikli = varsayım)
         mu_g  = gnb.theta_[cls, i]
         sig_g = np.sqrt(gnb.var_[cls, i])
         xr = np.linspace(vals.min(), vals.max(), 200)
@@ -423,6 +529,9 @@ ax4.set_title(f"KNN – K Analizi (Best K={best_k})",
 ax4.set_xticks(list(K_RANGE)); ax4.legend(fontsize=8); ax4.grid(True)
 
 # Panel 5 – GNB prior/posterior çizgisi
+# Glucose en iyi ayrım gücüne sahiptir (iki sınıf arasında
+# belirgin μ farkı); bu FINAL_REPORT.md §5.1'deki en yüksek
+# Z istatistiğiyle tutarlıdır.
 ax5 = fig.add_subplot(gs[1, 1]); ax5.set_facecolor(CARD)
 feat_idx = FEAT.index("Glucose")
 for cls, clr, lbl in [(0, C1, "Neg(0)"), (1, C3, "Pos(1)")]:

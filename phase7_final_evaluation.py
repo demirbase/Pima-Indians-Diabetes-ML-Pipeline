@@ -6,6 +6,66 @@
   • Regresyon MSE / RMSE / MAE / R² raporu
   • Final Model Seçimi + Özet Dashboard
 =============================================================
+
+Modül Amacı
+-----------
+  Bu modül, 7 fazlık pipeline'ın final değerlendirme aşamasıdır.
+  Tüm sınıflandırma ve regresyon modellerinin test seti üzerindeki
+  nihai performansı kapsamlı görselleştirmelerle raporlanır.
+
+  Özellikle:
+  - ROC ve Precision-Recall eğrileri: hem test hem 10-Fold CV
+  - Kalibrasyon eğrisi: modelin olasılık tahminlerinin ne kadar
+    güvenilir olduğunu gösterir
+  - BMI regresyon (Faz 2) son değerlendirmesi
+  - Tüm modelleri karşılaştıran radar chart ve metrik tablolar
+
+Teorik Arka Plan
+----------------
+  ROC Eğrisi ve AUC:
+    Receiver Operating Characteristic, tüm eşik değerlerinde
+    TPR (Duyarlılık) − FPR (1−Özgüllük) dengesini gösterir.
+    AUC = P(ŷ_pos > ŷ_neg): rastgele bir çiftte sınıflandırıcının
+    pozitifi negatifin önüne koyma olasılığı.
+    AUC yorumu: >0.9 mükemmel, 0.8–0.9 iyi ✅, 0.7–0.8 kabul edilebilir.
+
+  Precision-Recall Eğrisi:
+    Dengesiz sınıf dağılımında AUC yanıltıcı olabilir;
+    PR eğrisi yalnızca pozitif sınıfa odaklanır.
+    AP (Average Precision) = PR eğrisinin altındaki alan.
+    Baseline: sınıf prevalansı (pozitif oranı ≈ 0.349).
+
+  Kalibrasyon (Reliability Diagram):
+    İyi kalibre model: P(y=1|ŷ=p) ≈ p
+    y=x çizgisine yakın → tahmin olasılıkları gerçek oranlarla uyumlu.
+    LR, doğası gereği iyi kalibre; GNB sıkıştırma eğilimi gösterir.
+
+  Regresyon Metrikleri:
+    MSE  = 1/n · Σ(y − ŷ)²           (kayıp; düşük → iyi)
+    RMSE = √MSE                        (aynı birim, yorumlanabilir)
+    MAE  = 1/n · Σ|y − ŷ|             (aykırı değere daha az duyarlı)
+    R²   = 1 − Σ(y−ŷ)²/Σ(y−ȳ)²      (%100 varyans açıklama)
+    Test R² = 0.431 → Faz 2'nin sınırlı BMI açıklama gücü.
+    Bu, kullanılan özelliklerin BMI'nın temel belirleyicisi
+    olmadığını gösterir. (FINAL_REPORT.md §3.5 ve §9.4)
+
+  Final Model Seçimi:
+    AUC ölçütüne göre Lojistik Regresyon en iyi performansa
+    sahiptir. (FINAL_REPORT.md §9.1)
+    Gerekçe: LR istatistiksel açıklayıcılık, kalibrasyon ve
+    AUC dengesinde en iyi skoru üretmektedir.
+
+Girdiler
+--------
+  phase1_outputs/train_scaled.csv
+  phase1_outputs/val_scaled.csv
+  phase1_outputs/test_scaled.csv
+
+Çıktılar
+--------
+  phase7_outputs/classification_metrics.csv – Sınıflandırma metrikleri
+  phase7_outputs/regression_metrics.csv     – Regresyon metrikleri
+  phase7_outputs/*.png                       – 8 adet görselleştirme
 """
 import numpy as np
 import pandas as pd
@@ -25,6 +85,7 @@ import warnings, os
 
 warnings.filterwarnings("ignore")
 
+# ── KOYU TEMA ──────────────────────────────────────────────
 DARK="#0d1117"; CARD="#161b22"; GRID="#21262d"
 C1="#58a6ff"; C2="#3fb950"; C3="#ff7b72"
 C4="#d2a8ff"; C5="#ffa657"; C6="#79c0ff"; TXT="#c9d1d9"
@@ -42,6 +103,7 @@ plt.rcParams.update({
 OUT = "phase7_outputs"; os.makedirs(OUT, exist_ok=True)
 
 def save(fname):
+    """Figürü OUTPUT_DIR altına kaydeder ve kapatır."""
     plt.savefig(f"{OUT}/{fname}", bbox_inches="tight", facecolor=DARK, dpi=150)
     plt.close(); print(f"  ✅  → {OUT}/{fname}")
 
@@ -49,6 +111,8 @@ def hdr(t): print(f"\n{'═'*62}\n  {t}\n{'═'*62}")
 
 # ── VERİ ───────────────────────────────────────────────────
 hdr("VERİ YÜKLEME")
+# Faz 1'in ölçeklenmiş setlerini kullanıyoruz.
+# Faz 7, Faz 1-6'nın tüm bulgularını nihai değerlendirmede özetler.
 train = pd.read_csv("phase1_outputs/train_scaled.csv")
 val   = pd.read_csv("phase1_outputs/val_scaled.csv")
 test  = pd.read_csv("phase1_outputs/test_scaled.csv")
@@ -64,8 +128,9 @@ X_all = np.vstack([X_tr, X_va, X_te])
 y_all = np.concatenate([y_tr, y_va, y_te])
 
 # Regresyon (BMI tahmini) — Faz 2'den
+# BMI bağımlı değişken; diğer özellikler bağımsız değişken.
+# Ölçeklenmiş uzayda doğrusal regresyon uygulanır.
 BMI_FEAT = [c for c in FEAT if c != "BMI" and c != "Outcome"]
-# Ölçeklenmiş train'de Outcome yok, BMI var → BMI bağımlı değişken
 REG_FEAT = [f for f in FEAT if f != "BMI"]
 X_tr_r   = train[REG_FEAT].values;  y_tr_r = train["BMI"].values
 X_va_r   = val[REG_FEAT].values;    y_va_r = val["BMI"].values
@@ -79,6 +144,8 @@ print(f"  Regresyon BMI: Train={len(y_tr_r)} Test={len(y_te_r)}")
 # ════════════════════════════════════════════════════════════
 hdr("A — MODELLERİ EĞİT")
 
+# Faz 5'te belirlenen optimum K değeri: 26
+# Bu değer Val hata minimizasyonuna dayanmaktadır.
 BEST_K = 26
 
 models = {
@@ -90,6 +157,8 @@ for m in models.values():
     m.fit(X_tr, y_tr)
 
 # 10-Fold CV olasılıkları (daha güvenilir ROC için)
+# CV olasılıkları, modelin gerçekçi genelleme gücünü yansıtır.
+# Tek hold-out test setine kıyasla daha az şans eseri varyans içerir.
 skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
 cv_probas = {}
 for mname, model in models.items():
@@ -101,7 +170,7 @@ for mname, model in models.items():
 test_probas = {m: models[m].predict_proba(X_te)[:, 1] for m in models}
 test_preds  = {m: models[m].predict(X_te) for m in models}
 
-# Regresyon modeli
+# Regresyon modeli (Faz 2'nin tekrarı — final performans raporlaması için)
 lr_reg = LinearRegression()
 lr_reg.fit(X_tr_r, y_tr_r)
 y_pred_reg_va = lr_reg.predict(X_va_r)
@@ -124,6 +193,7 @@ for mname in models:
         "Accuracy"  : accuracy_score(y_te, pred),
         "AUC-ROC"   : roc_auc_score(y_te, proba),
         "F1"        : f1_score(y_te, pred),
+        # Manuel hesaplama: epsilon (1e-9) sıfır bölme hatasını önler.
         "Precision" : tp/(tp+fp+1e-9),
         "Recall"    : tp/(tp+fn+1e-9),
         "Specificity": tn/(tn+fp+1e-9),
@@ -144,6 +214,10 @@ for _, r in df_clf.iterrows():
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 1 — ROC EĞRİLERİ")
 
+# ROC eğrisi: her olasılık eşiği için TPR-FPR çifti hesaplanır.
+# Sol üst köşeye ne kadar yakın → o kadar iyi (TPR↑, FPR↓).
+# AUC = ROC eğrisinin altındaki integral (0.5–1.0 aralığı).
+# CV ROC'u: hold-out testten daha kararlı, tüm veriyi kullanır.
 fig, axes = plt.subplots(1, 2, figsize=(20, 8))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("FAZ 7 — ROC Eğrisi: Tüm Modeller (Test Seti & 10-Fold CV)",
@@ -165,7 +239,7 @@ for ax, (proba_dict, title, src) in zip(axes, [
                 label=f"{mname}  AUC = {auc:.4f}")
         ax.fill_between(fpr, tpr, alpha=0.05, color=clr)
 
-    # En iyi model vurgula
+    # En iyi model vurgula: AUC değeri en yüksek olan model
     aucs  = {m: roc_auc_score(src, p) for m, p in proba_dict.items()}
     best  = max(aucs, key=aucs.get)
     fpr_, tpr_, _ = roc_curve(src, proba_dict[best])
@@ -173,7 +247,7 @@ for ax, (proba_dict, title, src) in zip(axes, [
                     color=[c for (m,c) in zip(models, MODEL_COLS) if m==best][0])
 
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
-    ax.set_xlabel("Yanlış Pozitif Oranı (FPR = 1 - Ozgüllük)", fontsize=10)
+    ax.set_xlabel("Yanlış Pozitif Oranı (FPR = 1 - Özgüllük)", fontsize=10)
     ax.set_ylabel("Doğru Pozitif Oranı (TPR = Duyarlılık)", fontsize=10)
     ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
     ax.legend(fontsize=9, loc="lower right")
@@ -197,6 +271,11 @@ plt.tight_layout(); save("01_roc_curves.png")
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 2 — PRECISION-RECALL EĞRİSİ")
 
+# PR eğrisi, özellikle dengesiz sınıf dağılımında kritiktir.
+# Pima veri setinde %34.9 pozitif oranı var → hafif dengesiz.
+# Baseline: tüm örnekleri pozitif tahmin eden modelin precision'ı
+# = prevalans ≈ 0.349.
+# AP (Average Precision): PR eğrisinin altındaki alan.
 fig, axes = plt.subplots(1, 2, figsize=(20, 8))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("Precision-Recall Eğrisi — Sınıf Dengesizliği Durumunda Kritik",
@@ -208,6 +287,7 @@ for ax, (proba_dict, src) in zip(axes, [
     (cv_probas,   y_all),
 ]):
     ax.set_facecolor(CARD)
+    # Baseline: sınıf prevalansı → PR altında bu değerin üstü anlamlı.
     ax.axhline(src.mean(), color=TXT, lw=1.2, ls=":",
                alpha=0.6, label=f"Baseline (Prev.={src.mean():.3f})")
     for (mname, proba), clr in zip(proba_dict.items(), MODEL_COLS):
@@ -230,6 +310,8 @@ plt.tight_layout(); save("02_precision_recall.png")
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 3 — AUC KARŞILAŞTIRMA")
 
+# CV ve Test AUC değerleri arasındaki yakınlık, modellerin
+# kararlı ve genellenebilir olduğunu gösterir. (FINAL_REPORT.md §8.3)
 cv_aucs  = {m: roc_auc_score(y_all, cv_probas[m]) for m in models}
 test_aucs = {m: roc_auc_score(y_te, test_probas[m]) for m in models}
 
@@ -264,6 +346,30 @@ plt.tight_layout(); save("03_auc_comparison.png")
 hdr("C — REGRESYON METRİKLERİ (BMI)")
 
 def reg_metrics(y_true, y_pred, label):
+    """
+    Regresyon performans metriklerini hesaplar.
+
+    Parametreler
+    ------------
+    y_true : ndarray
+        Gerçek BMI değerleri (ölçeklenmiş uzayda).
+    y_pred : ndarray
+        Tahmin edilen BMI değerleri.
+    label : str
+        Hangi set için hesaplandığı ("Validation" veya "Test").
+
+    Döndürür
+    --------
+    dict
+        {"Set": label, "MSE": ..., "RMSE": ..., "MAE": ..., "R2": ...}
+
+    Yorumlama Notları
+    -----------------
+    R² = 0.431 (FINAL_REPORT.md §3.5): Kullanılan 7 özellik BMI
+    değişiminin yaklaşık %43'ünü açıklayabiliyor. Geri kalan %57'nin
+    diğer faktörlerden (genetik, yaşam tarzı, beslenme) kaynaklandığı
+    düşünülmektedir.
+    """
     mse  = mean_squared_error(y_true, y_pred)
     rmse = np.sqrt(mse)
     mae  = mean_absolute_error(y_true, y_pred)
@@ -286,6 +392,9 @@ for _, r in df_reg.iterrows():
 # ── GRAFİK 4: Regresyon Sonuçları ──────────────────────────
 hdr("GRAFİK 4 — REGRESYON SONUÇLARI")
 
+# Tahmin vs. Gerçek grafiği: noktaların y=x çizgisine ne kadar
+# yakın olduğu modelin hassasiyetini gösterir.
+# Dağılma (scatter) modelin hatalarının büyüklüğüne karşılık gelir.
 fig, axes = plt.subplots(1, 3, figsize=(22, 7))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("Lineer Regresyon — BMI Tahmin Performansı (Faz 2)",
@@ -306,8 +415,10 @@ for ax, (y_true, y_pred, label, clr) in zip(axes, [
     ax.scatter(y_true, y_pred, color=clr, alpha=0.55, s=20, edgecolors="none")
     lims = [min(y_true.min(), y_pred.min())-1,
             max(y_true.max(), y_pred.max())+1]
+    # Mükemmel tahmin yay: ŷ = y → bu çizgi ideal durumu gösterir.
     ax.plot(lims, lims, "--", color=C5, lw=2, label="Mükemmel tahmin (y=x)")
-    # Regresyon çizgisi (Pred ~ True)
+    # Gerçek regresyon çizgisi (tahmin ~ gerçek): eğim <1 ise model
+    # uç değerleri hafifçe ortalamaya doğru çekiyor (regresyon toward mean).
     slope, intercept, *_ = sp_stats.linregress(y_true, y_pred)
     xr = np.linspace(lims[0], lims[1], 100)
     ax.plot(xr, slope*xr+intercept, color=TXT, lw=1.5, alpha=0.7)
@@ -320,6 +431,10 @@ for ax, (y_true, y_pred, label, clr) in zip(axes, [
 plt.tight_layout(); save("04_regression_results.png")
 
 # ── GRAFİK 5: Kalıntı Analizi ──────────────────────────────
+# Kalıntı analizi, OLS varsayımlarını kontrol eder:
+# 1. Kalıntı vs. Tahmin: eğim + homokedestedisite kontrolü
+# 2. Histogram: normallik görsel testi
+# 3. Q-Q Plot: normallik sayısal testi (R² → 1 = normal)
 fig, axes = plt.subplots(1, 3, figsize=(22, 7))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("Lineer Regresyon — Kalıntı Analizi (Test Seti)",
@@ -332,11 +447,14 @@ ax.scatter(y_pred_reg_te, residuals, color=C1, alpha=0.55, s=20)
 ax.axhline(0, color=C5, lw=2, ls="--")
 ax.set_xlabel("Tahmin", fontsize=10); ax.set_ylabel("Kalıntı", fontsize=10)
 ax.set_title("Kalıntı vs. Tahmin", fontsize=11, fontweight="bold")
+# Kalıntı eğimi sıfır olmalı (üniform dağılım).
+# Funnel pattern → heterosedastik → BMI tahmininde varyans tahmine bağımlı?
 ax.grid(True, alpha=0.3)
 
 ax = axes[1]; ax.set_facecolor(CARD)
 ax.hist(residuals, bins=30, color=C4, edgecolor=DARK, alpha=0.85, density=True)
 xr = np.linspace(residuals.min(), residuals.max(), 200)
+# Normal fit: residual histogram'ın beklenen N(0, σ²) dağılımıyla kıyaslanması.
 ax.plot(xr, sp_stats.norm.pdf(xr, residuals.mean(), residuals.std()),
         color=C5, lw=2.5, label="Normal fit")
 ax.set_xlabel("Kalıntı", fontsize=10); ax.set_ylabel("Yoğunluk", fontsize=10)
@@ -376,7 +494,7 @@ ax1.set_xlabel("FPR"); ax1.set_ylabel("TPR")
 ax1.set_title("ROC — Test Seti", fontsize=11, fontweight="bold")
 ax1.legend(fontsize=8, loc="lower right"); ax1.grid(True, alpha=0.3)
 
-# Panel 2: AUC Bar
+# Panel 2: AUC Bar (büyükten küçüğe sıralanmış)
 ax2 = axes[0, 1]; ax2.set_facecolor(CARD)
 aucs_sorted = sorted(test_aucs.items(), key=lambda x: x[1], reverse=True)
 names_, aucs_ = zip(*aucs_sorted)
@@ -393,6 +511,7 @@ for bar, v in zip(bars, aucs_):
 ax2.legend(fontsize=8); ax2.grid(axis="y")
 
 # Panel 3: Radar Chart (örümcek ağı)
+# Tüm metrikleri tek grafikte kıyaslar; güçlü-zayıf yönler görünür.
 ax3 = axes[0, 2]; ax3.remove()
 ax3 = fig.add_subplot(2, 3, 3, polar=True)
 ax3.set_facecolor(CARD)
@@ -450,6 +569,7 @@ ax5.set_title("Regresyon Metrikleri — BMI Tahmini\n(Lineer Regresyon / EKK)",
               fontsize=10, fontweight="bold", pad=12)
 
 # Panel 6: Sonuç yorumu
+# AUC > 0.8 → "İyi" eşiği geçilmiş → klinik kullanıma değerlendirilebilir.
 ax6 = axes[1, 2]; ax6.set_facecolor(DARK); ax6.axis("off")
 best_clf = df_clf.loc[df_clf["AUC-ROC"].idxmax(), "Model"]
 best_acc = df_clf.loc[df_clf["Accuracy"].idxmax(), "Model"]
@@ -487,6 +607,12 @@ plt.tight_layout(); save("06_final_model_dashboard.png")
 # ════════════════════════════════════════════════════════════
 hdr("GRAFİK 7 — KALİBRASYON EĞRİSİ")
 
+# Güvenilirlik Diyagramı:
+# x ekseni: modelin verdiği ortalama olasılık tahmini (predicted probability)
+# y ekseni: o olasılık aralığındaki gerçek pozitif oranı (fraction of positives)
+# y=x (çapraz çizgi) = mükemmel kalibrasyon
+# LR doğası gereği iyi kalibre (Platt scaling kullanmaz).
+# GNB genellikle aşırı güvenli (overconfident) olup kenara doğru kayar.
 from sklearn.calibration import calibration_curve
 
 fig, ax = plt.subplots(figsize=(10, 8))
@@ -498,6 +624,7 @@ for (mname, proba), clr in zip(test_probas.items(), MODEL_COLS):
         prob_true, prob_pred = calibration_curve(y_te, proba, n_bins=8)
         ax.plot(prob_pred, prob_true, marker="o", ms=7,
                 color=clr, lw=2.2, label=mname)
+        # Gölge: kalibrasyonun ideal çizgiden sapmasını vurgular
         ax.fill_between(prob_pred, prob_pred, prob_true,
                         alpha=0.08, color=clr)
     except Exception:
@@ -583,6 +710,8 @@ for i, v in enumerate(accs_v):
 ax.grid(axis="y")
 
 # P6: Regresyon R² + MAE
+# R² değeri ölçeklenmiş uzayda hesaplanmıştır; gerçek BMI birimindeki
+# yorumlama için FINAL_REPORT.md §3.5'e bakınız.
 ax = fig.add_subplot(gs[1, 3]); ax.set_facecolor(CARD)
 ax.barh(["Validation", "Test"],
         df_reg["R2"].tolist(), color=[C1, C2], edgecolor=DARK, alpha=0.85)

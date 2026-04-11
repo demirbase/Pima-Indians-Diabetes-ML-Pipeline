@@ -5,6 +5,73 @@
   • Bootstrap (B=1000) — katsayı güven aralıkları
   • Bias-Corrected Accelerated (BCa) Bootstrap CI
 =============================================================
+
+Modül Amacı
+-----------
+  Bu modül, Faz 4 ve Faz 5'te elde edilen model performans
+  tahminlerinin istatistiksel güvenilirliğini ölçer.
+
+  İki temel resampling yöntemi uygulanır:
+  1. **10-Fold Stratified Cross Validation:** Tüm veriyi 10 kata
+     bölerek modellerin ortalama performansını ±1σ belirsizlikle
+     raporlar. Tek bir hold-out test setine göre훨씬 daha kararlı
+     bir tahmin üretir.
+  2. **Bootstrap (B=1000):** Lojistik Regresyon katsayılarının
+     örnekleme dağılımını parametrik olmayan yollarla (non-parametric)
+     tahmin eder; iki farklı CI hesaplanır: Percentile ve BCa.
+
+Teorik Arka Plan
+----------------
+  10-Fold Stratified Cross Validation:
+    K=10 kat seçimi: Az sayıda fold → yüksek bias (az test verisi);
+    Çok fold → yüksek varyans (test seti değişkenli).
+    K=10, bias-variance açısından sektörün standart dengesidir.
+    "Stratified" → her fold'da sınıf oranı (%34.9 pozitif) korunur;
+    küçük fold'larda şans eseri dengesizlik önlenir.
+
+  Bootstrap Güven Aralığı Yöntemleri:
+  a) Percentile CI:
+     CI = [θ*_(α/2), θ*_(1-α/2)]
+     Boot. dağılımının doğrudan kantilleri kullanılır.
+     Hızlı ve sezgisel, ancak skewed (çarpık) dağılımlarda bias var.
+
+  b) BCa (Bias-Corrected & Accelerated) CI:
+     z₀ = Φ⁻¹[P(θ* < θ̂)]  (bias düzeltme terimi)
+     a = Σ(θ̄−θᵢ)³ / [6·(Σ(θ̄−θᵢ)²)^(3/2)]  (ivme parametresi)
+     Skewed dağılımlarda ikinci derece doğru.
+     BCa, parametrik varsayımsız en pürüzlü güven aralığıdır.
+
+  Bootstrap Bias:
+     θ̄* − θ̂ → Bootstrap katsayısının orijinalden ortalama sapması.
+     Büyük bias → model belirli veri yapısına aşırı hassas.
+
+  CV vs. Hold-Out Karşılaştırması:
+     CV performansı ile hold-out testi arasındaki benzerlik,
+     modelin kararlı genelleştiğini kanıtlar. Büyük uçurum →
+     veri varyansı yüksek veya hold-out seti temsili değil.
+     FINAL_REPORT.md §8.3'te LR için CV Acc ≈ Test Acc.
+
+Neden Train+Val Bootstrap, Test Bootstrap Değil?
+-------------------------------------------------
+  Bootstrap katsayı tahmini yalnızca Train+Val verisinde yapılır.
+  Test seti "gelecekteki görülmemiş veri"yi temsil eder.
+  Bootstrap sürecinde test setini kullanmak, bu prensibi ihlal eder.
+  CV ise train+val+test hepsini çapraz düzenlemede kullanır;
+  ancak hiçbir doğrulama seti aynı anda hem train hem test olmaz.
+
+Girdiler
+--------
+  phase1_outputs/train_scaled.csv
+  phase1_outputs/val_scaled.csv
+  phase1_outputs/test_scaled.csv
+  phase1_outputs/train_raw.csv    ← Bootstrap için ölçeklenmemiş
+  phase1_outputs/val_raw.csv
+
+Çıktılar
+--------
+  phase6_outputs/cv_fold_results.csv    – Her fold sonuçları
+  phase6_outputs/bootstrap_coefs.csv   – Bootstrap katsayıları
+  phase6_outputs/*.png                  – 8 adet görselleştirme
 """
 import numpy as np
 import pandas as pd
@@ -42,6 +109,7 @@ plt.rcParams.update({
 OUT = "phase6_outputs"; os.makedirs(OUT, exist_ok=True)
 
 def save(fname):
+    """Figürü OUTPUT_DIR altına kaydeder ve kapatır."""
     plt.savefig(f"{OUT}/{fname}", bbox_inches="tight", facecolor=DARK, dpi=150)
     plt.close(); print(f"  ✅  → {OUT}/{fname}")
 
@@ -59,12 +127,16 @@ test_raw  = pd.read_csv("phase1_outputs/test_raw.csv")
 
 FEAT = [c for c in train_sc.columns if c != "Outcome"]
 
-# CV için tüm veriyi birleştir (ölçeklenmiş)
+# CV için tüm veriyi birleştir (ölçeklenmiş): LR ve GNB ölçeklenmiş
+# veride doğrudan çalışabilir. Notlar: X_all burada pipelinesiz
+# kullanılmaktadır; veri varlıkla zaten Faz 1'de ölçeklenmiş.
 all_sc  = pd.concat([train_sc, val_sc, test_sc], ignore_index=True)
 X_all   = all_sc[FEAT].values
 y_all   = all_sc["Outcome"].values
 
 # Bootstrap için sadece train+val (test'i hiç görmeyiz)
+# Katsayı güven aralıklarının test setine bağımlı olmaması
+# istatistiksel geçerlilik için zorunludur.
 all_tv   = pd.concat([train_raw, val_raw], ignore_index=True)
 X_tv_raw = all_tv[FEAT].values
 y_tv     = all_tv["Outcome"].values
@@ -77,12 +149,33 @@ print(f"  CV için: {len(y_all)} örnek | Bootstrap için: {len(y_tv)} örnek")
 hdr("A — 10-FOLD STRATİFİED CROSS VALIDATION")
 
 def _safe_auc(y_true, y_prob):
-    """AUC hesaplama — fold'da tek sınıf varsa 0.5 döndür."""
+    """
+    AUC hesaplama — fold'da tek sınıf varsa 0.5 döndür.
+
+    Parametreler
+    ------------
+    y_true : ndarray
+        Gerçek etiketler.
+    y_prob : ndarray
+        Tahmin edilen olasılıklar.
+
+    Döndürür
+    --------
+    float
+        AUC-ROC; tek sınıf varsa 0.5 (anlamsız AUC yok).
+
+    Notlar
+    ------
+    Küçük fold sayısında (K=10) stratify=True ile bu durum
+    nadiren oluşur; ancak savunmacı kodlama için gereklidir.
+    """
     try:
         return roc_auc_score(y_true, y_prob)
     except ValueError:
         return 0.5
 
+# StratifiedKFold: sınıf dağılımını her fold'da korur
+# shuffle=True + random_state=42: tekrarlanabilir karıştırma
 skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
 scorers = {
     "accuracy" : make_scorer(accuracy_score),
@@ -92,6 +185,8 @@ scorers = {
                                greater_is_better=False),
 }
 
+# Faz 5'ten gelen optimum K değeri.
+# Val hatası minimum olan K=26 seçilmişti.
 best_k = 26   # Faz 5'ten gelen optimum K
 
 models_cv = {
@@ -133,6 +228,7 @@ for ax, metric, mlabel in zip(axes, metrics_show, metric_labels):
         mu   = vals.mean()
         ax.plot(folds, vals, marker="o", ms=6, color=clr,
                 lw=1.8, alpha=0.85, label=f"{mname} (μ={mu:.3f})")
+        # Ortalama çizgisi: fold boyunca tutarlılığı gösterir
         ax.axhline(mu, color=clr, lw=1, ls="--", alpha=0.5)
         ax.fill_between(folds, vals, mu, alpha=0.06, color=clr)
     ax.set_xlabel("Fold Numarası", fontsize=10)
@@ -143,6 +239,9 @@ for ax, metric, mlabel in zip(axes, metrics_show, metric_labels):
 plt.tight_layout(); save("01_cv_fold_results.png")
 
 # ── GRAFİK 2: CV Violin / Box Plot ─────────────────────────
+# Violin plot: olasılık veya KDE dağılımını gösterir.
+# Box plot: medyan, IQR ve outlier'ları gösterir.
+# İkisinin birleşimi en kapsamlı performans belirsizlik görünümünü verir.
 fig, axes = plt.subplots(1, 3, figsize=(22, 7))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("10-Fold CV — Dağılım (Box + Violin)",
@@ -168,7 +267,7 @@ for ax, metric, mlabel in zip(axes, metrics_show, metric_labels):
     ax.set_xticklabels(list(cv_results.keys()), rotation=12, fontsize=8)
     ax.set_title(f"{mlabel}", fontsize=11, fontweight="bold")
     ax.set_ylabel(mlabel, fontsize=9); ax.grid(axis="y")
-    # Ortalamalar
+    # Ortalamalar konsol çıktısıyla tutarlı
     for i, (mname, res) in enumerate(cv_results.items(), 1):
         mu = res[metric].mean()
         ax.text(i, mu, f" μ={mu:.3f}", va="center",
@@ -187,6 +286,7 @@ for ax, metric, mlabel in zip(axes, metrics_show, metric_labels):
     sds  = [cv_results[m][metric].std()  for m in cv_results]
     bars = ax.bar(range(3), mus, color=MODEL_COLS,
                   edgecolor=DARK, linewidth=1.2, alpha=0.85)
+    # Hata çubukları: ±1σ → 10 fold boyunca performansın değişkenliği
     ax.errorbar(range(3), mus, yerr=sds, fmt="none",
                 color=TXT, capsize=6, capthick=2, elinewidth=2)
     ax.set_xticks(range(3))
@@ -216,6 +316,13 @@ print(f"  CV CSV → {OUT}/cv_fold_results.csv")
 # ════════════════════════════════════════════════════════════
 hdr("B — BOOTSTRAP (B=1000) — Katsayı Güven Aralıkları")
 
+# Bootstrap prosedürü:
+# 1. Train+Val'den yerine koyarak n adet örnek çek (n=|Train+Val|)
+# 2. Her bootstrap örneğinde StandardScaler fit et (veri sızıntısı önlemi)
+# 3. LR fit et → katsayıları kaydet
+# 4. 1000 replikadan katsayı dağılımını oluştur → CI hesapla
+# Not: Her bootstrap örnekleminde scaler yeniden fit ediliyor (önemli!).
+# Aksi halde orijinal train'in ölçeğini replicaler'a dayatmış oluruz.
 B            = 1000
 rng          = np.random.default_rng(42)
 n_tv         = len(y_tv)
@@ -227,10 +334,13 @@ boot_accs    = np.zeros(B)
 
 print(f"  {B} bootstrap örneklemesi çekiliyor...")
 for b in range(B):
+    # Yerine koyarak örnekleme: bazı örnekler birden fazla kez seçilir.
+    # Ortalama uniqe örnek oranı: 1 − 1/e ≈ 63.2%
     idx     = rng.integers(0, n_tv, size=n_tv)   # yerine koyarak
     X_boot  = X_tv_raw[idx]
     y_boot  = y_tv[idx]
 
+    # Her bootstrap örneğinde scaler ayrı fit edilir (veri sızıntısı önlemi).
     scaler  = StandardScaler()
     X_b_sc  = scaler.fit_transform(X_boot)
 
@@ -251,15 +361,54 @@ lr_orig.fit(X_tv_sc_orig, y_tv)
 orig_coefs = np.concatenate([[lr_orig.intercept_[0]], lr_orig.coef_[0]])
 
 # Percentile CI (%95)
+# Bootstrap dağılımının doğrudan 2.5. ve 97.5. persentilleri
 ci_lo_p   = np.percentile(boot_coefs, 2.5, axis=0)
 ci_hi_p   = np.percentile(boot_coefs, 97.5, axis=0)
 
 # BCa (Bias-Corrected Accelerated) CI
 def bca_ci(boot_dist, orig_val, alpha=0.05):
+    """
+    Bias-Corrected Accelerated (BCa) Bootstrap Güven Aralığı hesaplar.
+
+    Parametreler
+    ------------
+    boot_dist : ndarray, şekil (B,)
+        Bootstrap replikalarından elde edilen istatistik dağılımı.
+    orig_val : float
+        Orijinal (tüm) veri üzerinde hesaplanan nokta tahmini.
+    alpha : float, varsayılan 0.05
+        Güven düzeyi: 1−α = %95 CI.
+
+    Döndürür
+    --------
+    tuple (float, float)
+        (CI alt sınırı, CI üst sınırı).
+
+    Algoritma
+    ---------
+    1. Bias düzeltme terimi z₀:
+       z₀ = Φ⁻¹[P(θ* < θ̂)]
+       Boot. dağılımında orijinal değerin altında kalanların oranı.
+
+    2. İvme parametresi a (jackknife yöntemiyle):
+       L_i = θ̄_{jack} − θ_{jack,i}
+       a = Σ(L³) / [6·(Σ(L²))^(3/2)]
+
+    3. Düzeltilmiş kantiller:
+       a₁ = Φ(z₀ + (z₀ + z_{α/2}) / (1 − a·(z₀ + z_{α/2})))
+       a₂ = Φ(z₀ + (z₀ + z_{1−α/2}) / (1 − a·(z₀ + z_{1−α/2})))
+
+    4. CI = [θ*_{a₁}, θ*_{a₂}]
+
+    Notlar
+    ------
+    Jackknife için hesaplama maliyetini azaltmak amacıyla
+    yalnızca B değerlerinin ilk 100'ü kullanılır (yaklaşım).
+    """
     n = len(boot_dist)
-    # Bias correction
+    # Bias correction: z₀
     z0 = sp_stats.norm.ppf(np.mean(boot_dist < orig_val))
-    # Acceleration
+    # Acceleration: jackknife ile a parametresi
     jack = np.array([np.mean(np.delete(boot_dist, i)) for i in range(min(n, 100))])
     L    = np.mean(jack) - jack
     a    = np.sum(L**3) / (6 * (np.sum(L**2))**1.5 + 1e-15)
@@ -279,6 +428,8 @@ for i in range(len(FEAT_NAMES)):
 # Katsayı istatistikleri
 boot_means = boot_coefs.mean(axis=0)
 boot_stds  = boot_coefs.std(axis=0)
+# Bootstrap bias: boot ortalaması orijinalden ne kadar sapıyor?
+# Büyük bias → model parametresi örnekleme dağılımına duyarlı.
 boot_bias  = boot_means - orig_coefs   # bootstrap bias
 
 df_boot = pd.DataFrame({
@@ -291,6 +442,7 @@ df_boot = pd.DataFrame({
     "CI95_Pct_Hi"  : ci_hi_p,
     "CI95_BCa_Lo"  : ci_lo_bca,
     "CI95_BCa_Hi"  : ci_hi_bca,
+    # Anlamlılık: CI'nın sıfır içermemesi → β≠0 (p<0.05 benzeri)
     "Anlamli_Pct"  : ~((ci_lo_p <= 0) & (ci_hi_p >= 0)),
     "Anlamli_BCa"  : ~((ci_lo_bca <= 0) & (ci_hi_bca >= 0)),
 })
@@ -308,6 +460,9 @@ for _, r in df_boot.iterrows():
 # ── GRAFİK 4: Katsayı Histogramları (Bootstrap Dağılımı) ───
 hdr("GRAFİK 4 — KATSAYI DISTRİBÜSYONLARI (Bootstrap)")
 
+# Bootstrap dağılımının normal görünmesi, Merkezi Limit Teoremi'nin
+# büyük B için uygulanabildiğini gösterir. N(μ,σ) fit eğrisi bu
+# normalliği sayısal olarak (görsel olarak) doğrular.
 n_rows, n_cols = 3, 3
 fig, axes = plt.subplots(n_rows, n_cols, figsize=(22, 14))
 fig.patch.set_facecolor(DARK)
@@ -323,11 +478,12 @@ for i, (fname, ax, clr) in enumerate(zip(FEAT_NAMES, axes_flat, colors_panel)):
     orig = orig_coefs[i]
     ci_lo, ci_hi = ci_lo_p[i], ci_hi_p[i]
 
-    # Histogram
+    # Histogram: B=1000 replikadan oluşan ampirik dağılım
     ax.hist(vals, bins=40, color=clr, edgecolor=DARK,
             linewidth=0.6, alpha=0.80, density=True)
 
-    # Normal fit eğrisi
+    # Normal fit eğrisi: dağılımın normallik derecesini gösterir.
+    # Teorik olarak B→∞ limitinde dağılım normal olur (CLT).
     mu_, sd_ = vals.mean(), vals.std()
     xr = np.linspace(vals.min(), vals.max(), 300)
     ax.plot(xr, sp_stats.norm.pdf(xr, mu_, sd_),
@@ -338,11 +494,13 @@ for i, (fname, ax, clr) in enumerate(zip(FEAT_NAMES, axes_flat, colors_panel)):
     ax.axvline(ci_lo,  color=C3,  lw=1.8, ls="--", label=f"CI95=[{ci_lo:.3f},{ci_hi:.3f}]")
     ax.axvline(ci_hi,  color=C3,  lw=1.8, ls="--")
     ax.axvline(0,      color=TXT, lw=0.8, alpha=0.5)
+    # CI gölgesi: güven aralığını doldurulan bölge ile vurgular
     ax.fill_between([ci_lo, ci_hi],
                     [0,0], [ax.get_ylim()[1]*1.5 if ax.get_ylim()[1] > 0 else 5],
                     alpha=0.08, color=C3, label="95% CI")
     ax.axvline(0, color=TXT, lw=0.8, alpha=0.4)
 
+    # Anlamlılık: CI sıfırı içermiyorsa β anlamlı kabul edilir
     sig = "★ Anlamlı" if not (ci_lo <= 0 <= ci_hi) else "— Anlamsız"
     ax.set_title(f"{fname}\n{sig}", fontsize=9, pad=5,
                  color=C2 if "Anlamlı" in sig else C3, fontweight="bold")
@@ -356,6 +514,9 @@ plt.tight_layout(); save("04_bootstrap_histograms.png")
 # ── GRAFİK 5: Forest Plot (Bootstrap CI) ───────────────────
 hdr("GRAFİK 5 — BOOTSTRAP FOREST PLOT")
 
+# Percentile CI vs BCa CI karşılaştırması:
+# Simetrik dağılımlarda ikisi aynı sonucu verir.
+# BCa, asimetrik veya yanlı (biased) katsayılarda daha güvenilir.
 fig, axes = plt.subplots(1, 2, figsize=(20, 8))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("Bootstrap Güven Aralıkları — Percentile vs. BCa (%95)",
@@ -393,6 +554,9 @@ plt.tight_layout(); save("05_bootstrap_forest.png")
 # ── GRAFİK 6: Bootstrap Accuracy Dağılımı ──────────────────
 hdr("GRAFİK 6 — BOOTSTRAP ACCURACY DAĞILIMI")
 
+# Bootstrap accuracy dağılımı, modelin genel performans güvenilirliğini
+# gösterir. Q-Q plot normallik testi olarak kullanılır.
+# R² > 0.99 → dağılım normale yakın → CLT geçerli.
 fig, axes = plt.subplots(1, 2, figsize=(18, 7))
 fig.patch.set_facecolor(DARK)
 fig.suptitle("Bootstrap Accuracy Dağılımı — Performans Güvenilirliği",
@@ -417,7 +581,8 @@ ax.set_ylabel("Yoğunluk", fontsize=10)
 ax.set_title(f"Bootstrap Accuracy Histogramı\n(B={B})", fontsize=11, fontweight="bold")
 ax.legend(fontsize=9); ax.grid(axis="y")
 
-# Q-Q plot
+# Q-Q plot: noktalar çizgi üzerinde ise dağılım normal.
+# R²: 1'e ne kadar yakınsa o kadar ideal normal.
 ax2 = axes[1]; ax2.set_facecolor(CARD)
 (osm, osr), (slope, intercept, r) = sp_stats.probplot(boot_accs, dist="norm")
 ax2.scatter(osm, osr, color=C1, alpha=0.6, s=12)
@@ -434,7 +599,10 @@ plt.tight_layout(); save("06_bootstrap_accuracy.png")
 # ── GRAFİK 7: CV vs. Hold-Out Karşılaştırması ──────────────
 hdr("GRAFİK 7 — CV vs. HOLD-OUT KARŞILAŞTIRMASI")
 
-# Hold-out sonuçları (Faz 4'ten)
+# CV ve hold-out sonuçları arasındaki benzerlik, cross-validation'ın
+# gerçek performansa ne kadar iyi yaklaştığını gösterir.
+# Büyük uçurum → ya CV seti temsili değil ya da test seti şansına bağlı.
+# FINAL_REPORT.md §8.3: LR için CV ≈ Hold-Out → model kararlı.
 X_te_sc = test_sc[FEAT].values; y_te = test_sc["Outcome"].values
 holdout = {}
 for mname, model in models_cv.items():
@@ -559,6 +727,7 @@ for bar, mu, sd in zip(bars5, mus_auc, sds_auc):
              ha="center", fontsize=8, color=TXT)
 
 # Panel 6: CV vs Holdout scatter
+# Noktalar y=x çizgisine yakınsa CV ile Hold-Out performansları örtüşüyor → kararlı model.
 ax6 = fig.add_subplot(gs[1, 2]); ax6.set_facecolor(CARD)
 cv_accs_all = [cv_results[m]["test_accuracy"].mean() for m in cv_results]
 ho_accs_all = [holdout[m]["acc"] for m in holdout]

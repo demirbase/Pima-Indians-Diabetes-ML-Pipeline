@@ -12,6 +12,46 @@
     • Validation eğrileri
     • Sklearn karşılaştırması (doğrulama)
 =============================================================
+
+Modül Amacı
+-----------
+  Bu modül, lojistik regresyon için Batch Gradient Descent (BGD)
+  algoritmasını sıfırdan uygular. Sklearn referans çözümüyle
+  özdeş sonuçlar üretilmesi, implementasyonun matematiksel
+  doğruluğunu kanıtlar (FINAL_REPORT.md §4.3).
+
+Teorik Arka Plan
+----------------
+  Lojistik regresyon, ikili hedef için sigmoid fonksiyonunu kullanır:
+    σ(z) = 1 / (1 + e⁻ᶻ),  z = Xw
+
+  Kayıp fonksiyonu (Binary Cross-Entropy — BCE):
+    L(w) = -1/n · Σ[yᵢ log(σ(zᵢ)) + (1−yᵢ) log(1−σ(zᵢ))]
+
+  Gradyan:
+    ∇L = 1/n · Xᵀ(σ(Xw) − y)
+
+  Güncelleme kuralı:
+    w_{t+1} = w_t − α · ∇L(w_t)
+
+  Başarılı yakınsama için ölçeklenmiş veri (Faz 1 çıktısı) kritiktir:
+  α=0.1 bu veri setinde ıraksamaz çünkü özellikler z-skor ekseninde
+  toplanmıştır. (FINAL_REPORT.md §4.2)
+
+  El yapımı GD vs. sklearn:
+    Val Accuracy = 0.7759 (her iki yöntem) — %100 özdeş ✅
+
+Girdiler
+--------
+  phase1_outputs/train_scaled.csv – z-skor ölçeklenmiş train seti
+  phase1_outputs/val_scaled.csv   – z-skor ölçeklenmiş val seti
+  phase1_outputs/test_scaled.csv  – z-skor ölçeklenmiş test seti
+
+Çıktılar
+--------
+  phase3_outputs/weights_comparison.csv – GD ve sklearn ağırlıkları
+  phase3_outputs/lr_summary.csv         – LR özet tablosu
+  phase3_outputs/*.png                  – 9 adet görselleştirme
 """
 
 import numpy as np
@@ -31,6 +71,7 @@ warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────
 #  KOYU TEMA
+#  Faz 1-2 ile tutarlı GitHub dark-mode paleti.
 # ─────────────────────────────────────────────
 DARK_BG    = "#0d1117"
 CARD_BG    = "#161b22"
@@ -43,6 +84,7 @@ ACCENT6    = "#79c0ff"
 TEXT_COLOR = "#c9d1d9"
 GRID_COLOR = "#21262d"
 
+# Her öğrenme oranına renk ata: kırmızı=tehlikeli, mavi=yavaş
 LR_COLORS = {
     0.1    : "#ff7b72",   # kırmızı  – yüksek / tehlikeli
     0.01   : "#ffa657",   # turuncu  – orta-yüksek
@@ -65,12 +107,21 @@ OUTPUT_DIR = "phase3_outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def save_fig(fname):
+    """
+    Mevcut Matplotlib figürünü OUTPUT_DIR altına kaydeder ve kapatır.
+
+    Parametreler
+    ------------
+    fname : str
+        Kaydedilecek dosya adı (örn. "01_loss_vs_iteration.png").
+    """
     path = os.path.join(OUTPUT_DIR, fname)
     plt.savefig(path, bbox_inches="tight", facecolor=DARK_BG, dpi=150)
     plt.close()
     print(f"  ✅  → {path}")
 
 def section_header(title):
+    """Konsol çıktısına görsel ayırıcı başlık basar."""
     print(f"\n{'═'*62}\n  {title}\n{'═'*62}")
 
 
@@ -79,6 +130,10 @@ def section_header(title):
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 0 — VERİ YÜKLEME")
 
+# Faz 1'in ölçeklenmiş setleri yüklenir.
+# Gradient Descent'in hız ve kararlılığı için ölçeklenmiş
+# veri şarttır. Ölçeklenmemiş veride gradyanlar büyük ölçek
+# farkları nedeniyle patlayabilir. (FINAL_REPORT.md §4.2)
 train = pd.read_csv("phase1_outputs/train_scaled.csv")
 val   = pd.read_csv("phase1_outputs/val_scaled.csv")
 test  = pd.read_csv("phase1_outputs/test_scaled.csv")
@@ -90,16 +145,30 @@ X_train = train[FEATURES].values;  y_train = train[TARGET].values
 X_val   = val[FEATURES].values;    y_val   = val[TARGET].values
 X_test  = test[FEATURES].values;   y_test  = test[TARGET].values
 
-# Bias sütunu ekle
+# Bias sütunu ekle: her satırın başına 1 eklenir → intercept (w₀) öğrenilir.
 def add_bias(X):
+    """
+    Özellik matrisinin soluna sabit 1 sütunu ekler (intercept için).
+
+    Parametreler
+    ------------
+    X : ndarray, şekil (n, p)
+        Özellik matrisi.
+
+    Döndürür
+    --------
+    ndarray, şekil (n, p+1)
+        Sol sütunu tamamen 1'lerden oluşan genişletilmiş matris.
+        Ağırlık vektörünün ilk elemanı intercept (w₀) olur.
+    """
     return np.hstack([np.ones((X.shape[0], 1)), X])
 
-X_train_b = add_bias(X_train)
-X_val_b   = add_bias(X_val)
-X_test_b  = add_bias(X_test)
+X_train_b = add_bias(X_train)   # (536, 9)
+X_val_b   = add_bias(X_val)     # (116, 9)
+X_test_b  = add_bias(X_test)    # (116, 9)
 
-n, p   = X_train_b.shape
-n_feat = p - 1  # intercept hariç
+n, p   = X_train_b.shape   # n=536, p=9 (8 özellik + 1 intercept)
+n_feat = p - 1  # intercept hariç özellik sayısı
 
 print(f"\n  Özellik sayısı   : {n_feat}")
 print(f"  Train boyutu     : {len(y_train)}")
@@ -113,29 +182,134 @@ print(f"  Pozitif oran     : Train={y_train.mean():.3f}  Val={y_val.mean():.3f} 
 section_header("ADIM 1 — LOJİSTİK REGRESYON FONKSİYONLARI")
 
 def sigmoid(z):
-    """Numerik kararlı sigmoid: σ(z) = 1 / (1 + e^{-z})"""
+    """
+    Sayısal kararlı sigmoid fonksiyonu.
+
+    Tanım: σ(z) = 1 / (1 + e⁻ᶻ)
+
+    Parametreler
+    ------------
+    z : ndarray veya float
+        Doğrusal kombinasyon: z = Xw
+
+    Döndürür
+    --------
+    ndarray veya float
+        [0, 1] aralığında olasılık değerleri.
+
+    Notlar
+    ------
+    Numerik kararlılık için iki ayrı dal kullanılır:
+      - z ≥ 0 : 1 / (1 + e⁻ᶻ)  → standart formülü
+      - z < 0 : eᶻ / (1 + eᶻ)  → büyük negatif z'de overflow önlenir
+
+    Eğer tek formül kullanılsaydı:
+      z = -1000 → e⁻ᶻ = e¹⁰⁰⁰ → OverflowError
+    """
     return np.where(z >= 0,
                     1.0 / (1.0 + np.exp(-z)),
                     np.exp(z) / (1.0 + np.exp(z)))
 
 def binary_cross_entropy(y_true, y_pred, eps=1e-15):
     """
-    BCE Loss = -1/n · Σ [y·log(ŷ) + (1-y)·log(1-ŷ)]
-    Clipping ile numerik kararlılık sağlanır.
+    Binary Cross-Entropy (BCE) kayıp fonksiyonu.
+
+    Formül:
+        BCE = -1/n · Σ [y·log(ŷ) + (1−y)·log(1−ŷ)]
+
+    Parametreler
+    ------------
+    y_true : ndarray, şekil (n,)
+        Gerçek ikili etiketler (0 veya 1).
+    y_pred : ndarray, şekil (n,)
+        Tahmin edilen olasılıklar (0–1 arası).
+    eps : float, varsayılan 1e-15
+        log(0) → -∞ durumunu önleyen küçük bir sınır değeri.
+
+    Döndürür
+    --------
+    float
+        Ortalama BCE kayıp değeri. Değer ↓ = model ↑ iyileşiyor.
+
+    Notlar
+    ------
+    - y=1 ise: kayıp = -log(ŷ) → ŷ→1 ise kayıp→0 ✅
+    - y=0 ise: kayıp = -log(1−ŷ) → ŷ→0 ise kayıp→0 ✅
+    - FINAL_REPORT.md §4.1'de formül gösterilmektedir.
     """
     y_pred = np.clip(y_pred, eps, 1 - eps)
     return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
 
 def predict_proba(X_bias, weights):
+    """
+    Sigmoid çıktısı olarak sınıf-1 olasılıklarını döndürür.
+
+    Parametreler
+    ------------
+    X_bias : ndarray, şekil (n, p+1)
+        Bias sütunu eklenmiş özellik matrisi.
+    weights : ndarray, şekil (p+1,)
+        Ağırlık vektörü (intercept dahil).
+
+    Döndürür
+    --------
+    ndarray, şekil (n,)
+        Her örnek için P(y=1|x) olasılığı.
+    """
     return sigmoid(X_bias @ weights)
 
 def predict(X_bias, weights, threshold=0.5):
+    """
+    Olasılık eşiğine göre ikili sınıf tahmini yapar.
+
+    Parametreler
+    ------------
+    X_bias : ndarray, şekil (n, p+1)
+        Bias sütunu eklenmiş özellik matrisi.
+    weights : ndarray, şekil (p+1,)
+        Ağırlık vektörü.
+    threshold : float, varsayılan 0.5
+        Karar eşiği. 0.5 = varsayılan; klinik bağlamda
+        Recall'u artırmak için azaltılabilir.
+
+    Döndürür
+    --------
+    ndarray, şekil (n,), dtype=int
+        0 veya 1 etiketleri.
+    """
     return (predict_proba(X_bias, weights) >= threshold).astype(int)
 
 def gradient(X_bias, y_true, weights):
     """
-    ∇L = 1/n · Xᵀ(ŷ - y)
-    Lojistik kayıp fonksiyonunun gradyanı.
+    BCE kayıp fonksiyonunun ağırlıklara göre gradyanı.
+
+    Formül:
+        ∇L = 1/n · Xᵀ(ŷ − y)
+
+    Parametreler
+    ------------
+    X_bias : ndarray, şekil (n, p+1)
+        Bias sütunu eklenmiş özellik matrisi.
+    y_true : ndarray, şekil (n,)
+        Gerçek etiketler.
+    weights : ndarray, şekil (p+1,)
+        Mevcut ağırlık vektörü.
+
+    Döndürür
+    --------
+    ndarray, şekil (p+1,)
+        Gradyan vektörü. Her bileşen bir ağırlığın güncelleme yönünü gösterir.
+
+    Notlar
+    ------
+    Bu gradyan, lojistik kaybın türevinden gelir:
+      ∂L/∂w = 1/n · Xᵀ(σ(Xw) − y)
+    Türevin detayları için FINAL_REPORT.md §4.1'e bakınız.
+
+    Boyut kontrolü:
+      X_bias.T → (p+1, n)
+      (y_pred - y_true) → (n,)
+      Sonuç: (p+1,)
     """
     y_pred = predict_proba(X_bias, weights)
     return (1 / len(y_true)) * (X_bias.T @ (y_pred - y_true))
@@ -152,19 +326,61 @@ def gradient_descent(X_train_b, y_train, X_val_b, y_val,
                      lr=0.01, n_iter=3000, tol=1e-8,
                      verbose=False, seed=42):
     """
-    Batch Gradient Descent — Lojistik Regresyon
-    w_{t+1} = w_t − α · ∇L(w_t)
+    Batch Gradient Descent ile Lojistik Regresyon eğitimi.
 
-    Parametreler:
-        lr      : öğrenme oranı (α)
-        n_iter  : maksimum iterasyon
-        tol     : yakınsama toleransı (loss değişimi)
-        verbose : ara çıktı
+    Güncelleme Kuralı:
+        w_{t+1} = w_t − α · ∇L(w_t)
 
-    Döndürür:
-        weights, train_losses, val_losses, val_accs, converged_at
+    "Batch" anlamı: her iterasyonda tüm train seti birden
+    kullanılır (mini-batch veya stochastic GD değil).
+
+    Parametreler
+    ------------
+    X_train_b : ndarray, şekil (n, p+1)
+        Bias sütunu eklenmiş train özellik matrisi.
+    y_train : ndarray, şekil (n,)
+        Train hedef etiketleri.
+    X_val_b : ndarray, şekil (m, p+1)
+        Bias sütunu eklenmiş validation özellik matrisi.
+    y_val : ndarray, şekil (m,)
+        Validation hedef etiketleri.
+    lr : float, varsayılan 0.01
+        Öğrenme oranı (α). Büyük → hızlı ama ıraksama riski;
+        küçük → yavaş ama kararlı. (FINAL_REPORT.md §4.2)
+    n_iter : int, varsayılan 3000
+        Maksimum iterasyon sayısı.
+    tol : float, varsayılan 1e-8
+        Yakınsama toleransı: ardışık loss farkı bu değerin
+        altına düşünce algoritma durdurulur.
+    verbose : bool, varsayılan False
+        True ise yakınsama/ıraksama bilgisi ekrana yazdırılır.
+    seed : int, varsayılan 42
+        Tekrarlanabilirlik için rastgele sayı üreteci tohumu.
+
+    Döndürür
+    --------
+    train_losses : ndarray, şekil (n_iter,)
+        Her iterasyondaki BCE train kaybı.
+    val_losses : ndarray, şekil (n_iter,)
+        Her iterasyondaki BCE validation kaybı.
+    val_accs : ndarray, şekil (n_iter,)
+        Her iterasyondaki validation doğruluğu.
+    grad_norms : ndarray, şekil (n_iter,)
+        Her iterasyondaki gradyan normu ‖∇L‖. Yakınsama kanıtı.
+    weights : ndarray, şekil (p+1,)
+        Eğitim sonrası öğrenilen ağırlık vektörü.
+    converged_at : int
+        Yakınsama iterasyonu; ıraksamada -1, tam bitmede n_iter.
+
+    Notlar
+    ------
+    - Iraksama durumunda (loss NaN veya >1e6) kalan
+      iterasyon değerleri NaN ile doldurulur.
+    - Başlangıç ağırlıkları N(0, 0.01)'den örneklenir;
+      büyük başlangıç → sigmoid doygunluğu riski.
     """
     rng = np.random.default_rng(seed)
+    # Küçük rastgele başlangıç: vanishing/exploding gradient önlemi
     weights = rng.normal(0, 0.01, size=X_train_b.shape[1])
 
     train_losses = []
@@ -174,15 +390,16 @@ def gradient_descent(X_train_b, y_train, X_val_b, y_val,
     converged_at = n_iter
 
     for i in range(n_iter):
-        # İleri geçiş
+        # İleri geçiş: ŷ = σ(Xw)
         y_pred_train = predict_proba(X_train_b, weights)
         loss_train   = binary_cross_entropy(y_train, y_pred_train)
 
-        # Gradyan
+        # Gradyan: ∇L = 1/n · Xᵀ(ŷ − y)
         grad = gradient(X_train_b, y_train, weights)
+        # L2 normu: ‖∇L‖ → 0 ise yakınsandı demektir
         grad_norm = np.linalg.norm(grad)
 
-        # Divergence kontrolü
+        # Divergence kontrolü: NaN veya aşırı büyük loss
         if not np.isfinite(loss_train) or loss_train > 1e6:
             if verbose:
                 print(f"    [iter {i}] IRAKSAMA! loss={loss_train:.4f}")
@@ -198,7 +415,7 @@ def gradient_descent(X_train_b, y_train, X_val_b, y_val,
         # Güncelleme: w ← w − α·∇L
         weights = weights - lr * grad
 
-        # Validation metrikleri
+        # Validation metrikleri (erken durdurma için izlenir)
         y_pred_val  = predict_proba(X_val_b, weights)
         loss_val    = binary_cross_entropy(y_val, y_pred_val)
         acc_val     = accuracy_score(y_val, (y_pred_val >= 0.5).astype(int))
@@ -208,7 +425,7 @@ def gradient_descent(X_train_b, y_train, X_val_b, y_val,
         val_accs.append(acc_val)
         grad_norms.append(grad_norm)
 
-        # Yakınsama testi
+        # Yakınsama testi: ardışık kayıp farkı toleransın altında mı?
         if i > 0 and abs(train_losses[-2] - train_losses[-1]) < tol:
             converged_at = i + 1
             if verbose:
@@ -227,6 +444,12 @@ print("  gradient_descent() fonksiyonu tanımlandı.")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 3 — ÖĞRENME ORANLARI KARŞILAŞTIRMASI")
 
+# Dört farklı α değeri test edilir.
+# FINAL_REPORT.md §4.2'de sonuçların analizi yer almaktadır:
+# α=0.01 → optimal (iter 5000'de yakınsama, val acc=0.7759)
+# α=0.1  → hızlı yakınsama (iter 1122) ama skaler ölçekleme sayesinde ıraksama yok
+# α=0.001 → yavaş, 5000 iter yetmez
+# α=0.0001 → 5000 iterasyonda tam yakınsamıyor
 LEARNING_RATES = [0.1, 0.01, 0.001, 0.0001]
 N_ITER         = 5000
 results        = {}
@@ -262,6 +485,8 @@ for lr in LEARNING_RATES:
 # ═══════════════════════════════════════════════════════════
 section_header("GRAFİK 1 — LOSS vs. İTERASYON")
 
+# Bu grafik, FINAL_REPORT.md §4.1'deki öğrenme oranı analizini görselleştirir.
+# Yakınsama noktası (mor dikey çizgi), algoritmanın ne zaman durduğunu gösterir.
 fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("FAZ 3 — Loss vs. İterasyon: Farklı Öğrenme Oranları",
@@ -288,7 +513,7 @@ for ax, lr in zip(axes.flatten(), LEARNING_RATES):
                 color=ACCENT4, linewidth=1.8, linestyle="--",
                 label="Val Loss", alpha=0.9, zorder=3)
 
-        # Yakınsama noktası
+        # Yakınsama noktası: dikey çizgi + scatter
         if res["converged_at"] > 0 and res["converged_at"] < N_ITER:
             conv_idx  = res["converged_at"] - 1
             conv_loss = res["train_loss"][conv_idx]
@@ -387,7 +612,8 @@ ax.set_ylim(0.5, 0.9)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
-# Sklearn referans doğruluğu (benchmark)
+# Sklearn referans: FINAL_REPORT.md §4.3 — el yapımı GD ile özdeş.
+# C=1e10 → düzenleştirme yok → saf MLE tahmini.
 sk_model = LogisticRegression(max_iter=5000, C=1e10, random_state=42)
 sk_model.fit(X_train, y_train)
 sk_acc = accuracy_score(y_val, sk_model.predict(X_val))
@@ -403,6 +629,10 @@ save_fig("03_val_accuracy.png")
 # ═══════════════════════════════════════════════════════════
 section_header("ADIM 4 — OPTİMAL MODEL (lr=0.01)")
 
+# α=0.01 seçildi: FINAL_REPORT.md §4.2'ye göre
+# hem düşük son loss (0.4610) hem yüksek val acc (0.7759) sağlar.
+# α=0.1 ile aynı acc'a ulaşır ama iterasyon 1122'de durur;
+# pratik olarak ikisi eşdeğerdir. Kararlılık açısından 0.01 tercih edildi.
 BEST_LR    = 0.01
 best_res   = results[BEST_LR]
 best_w     = best_res["weights"]
@@ -437,6 +667,9 @@ for name, w in zip(feat_names, best_w):
 # ═══════════════════════════════════════════════════════════
 section_header("GRAFİK 4 — GRADYAN NORMU vs. İTERASYON")
 
+# Gradyan normu ‖∇L‖ → 0 ise algoritma minimum'a yaklaşıyor demektir.
+# Bu grafik yakınsama kanıtını sayısal olarak sunar.
+# Log ölçeği, birkaç büyüklük mertebesini aynı grafikte gösterir.
 fig, axes = plt.subplots(1, 2, figsize=(18, 6))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("Gradyan Normu ‖∇L‖ — Yakınsama Kanıtı",
@@ -451,6 +684,7 @@ for ax, lr in [(axes[0], 0.01), (axes[1], 0.001)]:
     ax.plot(iters[valid], gn[valid], color=color,
             linewidth=2, alpha=0.9)
     ax.fill_between(iters[valid], gn[valid], alpha=0.15, color=color)
+    # 1e-4 eşiği: yaygın kullanılan yakınsama kriteri
     ax.axhline(1e-4, color=ACCENT3, linestyle="--",
                linewidth=1.5, label="Eşik: 1e-4")
     ax.set_yscale("log")
@@ -468,6 +702,9 @@ save_fig("04_gradient_norm.png")
 # ═══════════════════════════════════════════════════════════
 section_header("GRAFİK 5 — KARIŞİKLIK MATRİSİ")
 
+# Karışıklık matrisi, hangi sınıfların karıştırıldığını gösterir.
+# FN (False Negative = Hasta ama negatif tahmin) klinik açıdan
+# kritiktir; FP'den daha maliyetlidir. (FINAL_REPORT.md §9.3)
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle(f"Karışıklık Matrisi — GD Modeli (α={BEST_LR})",
@@ -508,6 +745,9 @@ save_fig("05_confusion_matrix.png")
 # ═══════════════════════════════════════════════════════════
 section_header("GRAFİK 6 — ROC EĞRİSİ")
 
+# ROC eğrisi: tüm eşik değerlerinde TPR-FPR dengesini gösterir.
+# GD ve sklearn eğrilerinin üst üste bineceği (AUC özdeşliği)
+# FINAL_REPORT.md §4.3'teki doğrulamayı görselleştirir.
 sk_proba_test = sk_model.predict_proba(X_test)[:, 1]
 fpr_gd,  tpr_gd,  _ = roc_curve(y_test, y_proba_test)
 fpr_sk,  tpr_sk,  _ = roc_curve(y_test, sk_proba_test)
@@ -539,6 +779,9 @@ save_fig("06_roc_curve.png")
 # ═══════════════════════════════════════════════════════════
 section_header("GRAFİK 7 — ÖZELLIK AĞIRLIKLARI")
 
+# Büyük pozitif ağırlık → o özellik diyabet olasılığını artırır.
+# Glucose en büyük ağırlığa (w≈+1.137) sahiptir → FINAL_REPORT.md §4.3 ve §9.1.
+# Bu tutarlılık, GD optimizasyonunun başarıyla çalıştığını doğrular.
 weights_no_bias = best_w[1:]    # intercept hariç
 order = np.argsort(np.abs(weights_no_bias))[::-1]
 feat_sorted = [FEATURES[i] for i in order]
@@ -571,6 +814,7 @@ save_fig("07_feature_weights.png")
 # ═══════════════════════════════════════════════════════════
 section_header("GRAFİK 8 — ÖĞRENME ORANI ANALİZ DASHBOARD")
 
+# Bu dashboard tüm öğrenme oranı analizini tek görselde özetler.
 fig = plt.figure(figsize=(22, 14))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("FAZ 3 — Gradient Descent: Öğrenme Oranı Analizi",
@@ -657,8 +901,12 @@ save_fig("08_lr_analysis_dashboard.png")
 # ═══════════════════════════════════════════════════════════
 #  GRAFİK 9 — SIGMOID FONKSİYONU VE GD ADIMI VİZÜELİ
 # ═══════════════════════════════════════════════════════════
-section_header("GRAFİK 9 — SİGMOID ve GD ADIMI")
+section_header("GRAFİK 9 — SİGMOİD ve GD ADIMI")
 
+# Bu grafik matematiksel arka planı görselleştirir:
+# - Sigmoid: nihai karar fonksiyonu (z=0'da 0.5 eşiği)
+# - BCE Loss: y=1 ve y=0 için kayıp davranışı
+# - GD adımları: loss yüzeyinde aşağı adımlar
 fig, axes = plt.subplots(1, 3, figsize=(22, 7))
 fig.patch.set_facecolor(DARK_BG)
 fig.suptitle("Matematiksel Arka Plan — Sigmoid · BCE Loss · GD Güncellemesi",
@@ -669,6 +917,7 @@ ax = axes[0]
 ax.set_facecolor(CARD_BG)
 z  = np.linspace(-6, 6, 300)
 ax.plot(z, sigmoid(z), color=ACCENT1, linewidth=2.5, label="σ(z)")
+# z=0 → σ(0)=0.5 → karar eşiği
 ax.axhline(0.5, color=ACCENT5, linewidth=1.5, linestyle="--",
            label="Karar sınırı (0.5)")
 ax.axvline(0,   color=TEXT_COLOR, linewidth=1, alpha=0.4)
@@ -682,6 +931,8 @@ ax.set_title("Sigmoid Fonksiyonu\nσ(z) = 1 / (1 + e⁻ᶻ)", fontsize=11,
 ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
 # Panel 2: BCE Loss vs p
+# y=1 ise ŷ→1 olduğunda kayıp→0 (doğru tahmin ödüllendirilir)
+# y=0 ise ŷ→0 olduğunda kayıp→0
 ax = axes[1]
 ax.set_facecolor(CARD_BG)
 p_vals = np.linspace(0.001, 0.999, 300)
@@ -697,6 +948,8 @@ ax.set_title("Binary Cross-Entropy\nL = −[y log(ŷ) + (1−y)log(1−ŷ)]",
 ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
 
 # Panel 3: GD adımı (1D loss eğrisi)
+# Gradient Descent'in aşağı inen adımlarını görselleştirir.
+# Her ok, w ← w − α·∇L güncellemesine karşılık gelir.
 ax = axes[2]
 ax.set_facecolor(CARD_BG)
 w_vals  = np.linspace(-3, 3, 300)
@@ -737,7 +990,7 @@ save_fig("09_theory_visualization.png")
 # ═══════════════════════════════════════════════════════════
 section_header("SONUÇLARI KAYDET")
 
-# Katsayı tablosu
+# Katsayı tablosu: GD ve sklearn ağırlıklarının karşılaştırması
 df_weights = pd.DataFrame({
     "Özellik"   : feat_names,
     "Ağırlık_GD": best_w,
