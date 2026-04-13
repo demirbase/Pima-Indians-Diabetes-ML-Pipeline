@@ -1,4 +1,4 @@
-# 🩺 Pima Indians Diabetes — Machine Learning Pipeline
+# Pima Indians Diabetes — Machine Learning Pipeline
 
 > **End-to-end makine öğrenmesi projesi:** Pima Indians Diabetes veri seti üzerinde veri ön işlemeden final model değerlendirmesine kadar 7 fazlı kapsamlı bir ML pipeline'ı.
 
@@ -6,7 +6,7 @@
 
 ---
 
-## 📋 İçindekiler
+## İçindekiler
 
 - [Proje Hakkında](#-proje-hakkında)
 - [Veri Seti](#-veri-seti)
