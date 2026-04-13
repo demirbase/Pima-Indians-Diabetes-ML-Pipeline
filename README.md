@@ -2,7 +2,7 @@
 
 > **End-to-end makine öğrenmesi projesi:** Pima Indians Diabetes veri seti üzerinde veri ön işlemeden final model değerlendirmesine kadar 7 fazlı kapsamlı bir ML pipeline'ı.
 
-**Hazırlayan:** Eren Demirbaş | **Tarih:** Nisan 2026 | **Ders:** Makine Öğrenmesi ve Fizikteki Uygulamaları Proje Ödevi
+**Hazırlayan:** Eren Demirbaş - Ulaş Efe Sakarya | **Tarih:** Nisan 2026 | **Ders:** Makine Öğrenmesi ve Fizikteki Uygulamaları Proje Ödevi
 
 ---
 
@@ -19,7 +19,7 @@
 
 ---
 
-## 🎯 Proje Hakkında
+## Proje Hakkında
 
 Bu proje, Pima Indian kökenli kadınlara ait klinik ölçümlerden **diyabet teşhisi yapmayı** amaçlamaktadır. Proje; veri kalitesi sorunlarının çözümünden istatistiksel model değerlendirmesine kadar uzanan sistematik bir makine öğrenmesi iş akışını kapsamaktadır.
 
@@ -33,7 +33,7 @@ Bu proje, Pima Indian kökenli kadınlara ait klinik ölçümlerden **diyabet te
 
 ---
 
-## 📊 Veri Seti
+## Veri Seti
 
 **Kaynak:** [Pima Indians Diabetes Dataset](https://www.kaggle.com/datasets/uciml/pima-indians-diabetes-database) — Ulusal Diyabet ve Sindirim ve Böbrek Hastalıkları Enstitüsü (NIDDK)
 
@@ -53,7 +53,7 @@ Bu proje, Pima Indian kökenli kadınlara ait klinik ölçümlerden **diyabet te
 
 ---
 
-## 📁 Proje Yapısı
+## Proje Yapısı
 
 ```
 proje_odev/
@@ -89,7 +89,7 @@ proje_odev/
 
 ---
 
-## 🔬 Pipeline Fazları
+## Pipeline Fazları
 
 ### Faz 1 — Veri Ön İşleme (`phase1_preprocessing.py`)
 
@@ -131,9 +131,9 @@ Matematiksel kanıt:
 | Öğrenme Oranı (α) | Son Kayıp | Val Accuracy | Durum |
 |---|---|---|---|
 | 0.1 | 0.4610 | 0.7759 | Hızlı yakınsama |
-| **0.01** | **0.4610** | **0.7759** | ✅ **Optimal** |
+| **0.01** | **0.4610** | **0.7759** | **Optimal** |
 | 0.001 | 0.4928 | 0.7500 | Yavaş |
-| 0.0001 | 0.6299 | 0.7328 | ❌ Yakınsamadı |
+| 0.0001 | 0.6299 | 0.7328 | Yakınsamadı |
 
 **El yapımı GD vs. sklearn:** Birebir özdeş sonuç (%100 uyum) — implementasyonun doğruluğu kanıtlandı.
 
@@ -166,8 +166,8 @@ Beklenen Test Hatası = Bias² + Varyans + ε (gürültü)
 | K | Train Err | Val Err | Bölge |
 |---|---|---|---|
 | 1 | **0.000** | 0.310 | ⬆️ Overfit |
-| **26** | 0.211 | **0.224** | ✅ **Optimum** |
-| 50 | 0.248 | 0.233 | ⬆️ Underfit |
+| **26** | 0.211 | **0.224** | **Optimum** |
+| 50 | 0.248 | 0.233 | ⬇️ Underfit |
 
 ---
 
@@ -180,12 +180,12 @@ Beklenen Test Hatası = Bias² + Varyans + ε (gürültü)
 | Model | CV Accuracy | CV F1 | Stabilite (σ) |
 |---|---|---|---|
 | Lojistik Reg. | 0.7682 ± 0.027 | 0.6297 ± 0.044 | — |
-| **KNN (K=26)** | 0.7630 ± **0.017** | 0.6024 ± 0.043 | ✅ **En stabil** |
+| **KNN (K=26)** | 0.7630 ± **0.017** | 0.6024 ± 0.043 | **En stabil** |
 | GNB | 0.7447 ± 0.048 | 0.6196 ± 0.067 | En değişken |
 
 **Bootstrap (B=1000) — %95 Güven Aralıkları:**
-- Glucose: [0.920, 1.457] — sıfırı **içermiyor** ✅
-- BMI: [0.406, 0.928] — sıfırı **içermiyor** ✅
+- Glucose: [0.920, 1.457] — sıfırı **içermiyor** 
+- BMI: [0.406, 0.928] — sıfırı **içermiyor** 
 
 ---
 
@@ -204,7 +204,7 @@ Beklenen Test Hatası = Bias² + Varyans + ε (gürültü)
 
 ---
 
-## 🏆 Model Karşılaştırması
+## Model Karşılaştırması
 
 | Kriter | Lojistik Reg. | KNN (K=26) | Gaussian NB |
 |---|---|---|---|
@@ -216,7 +216,7 @@ Beklenen Test Hatası = Bias² + Varyans + ε (gürültü)
 | **Kalibrasyon** | **İyi** | Orta | Orta |
 | **CV Stabilite (σ)** | 0.027 | **0.017** | 0.048 |
 
-### 📌 Kullanım Senaryosuna Göre Model Seçimi
+### Kullanım Senaryosuna Göre Model Seçimi
 
 | Senaryo | Önerilen Model | Gerekçe |
 |---|---|---|
@@ -226,7 +226,7 @@ Beklenen Test Hatası = Bias² + Varyans + ε (gürültü)
 
 ---
 
-## ⚙️ Kurulum ve Kullanım
+## Kurulum ve Kullanım
 
 ### Gereksinimler
 
@@ -274,7 +274,7 @@ done
 
 ---
 
-## 📦 Gereksinimler
+## Gereksinimler
 
 | Kütüphane | Sürüm (önerilen) | Kullanım |
 |---|---|---|
@@ -291,7 +291,7 @@ pip install numpy pandas matplotlib seaborn scikit-learn scipy
 
 ---
 
-## 📝 Raporlar
+## Raporlar
 
 Her faz için ayrıntılı rapor mevcuttur:
 
@@ -308,7 +308,7 @@ Her faz için ayrıntılı rapor mevcuttur:
 
 ---
 
-## 📈 Üretilen Çıktılar
+## Üretilen Çıktılar
 
 | Faz | Script | Grafik Sayısı | CSV Sayısı |
 |---|---|---|---|
@@ -323,7 +323,7 @@ Her faz için ayrıntılı rapor mevcuttur:
 
 ---
 
-## ⚠️ Sınırlılıklar
+## Sınırlılıklar
 
 1. **Küçük veri seti:** 768 örnek — büyük veri setlerinde model performansı artabilir
 2. **Cinsiyete özgüllük:** Yalnızca kadın hastalar — bulgular genellenemez
