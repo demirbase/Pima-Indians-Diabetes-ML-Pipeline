@@ -1,7 +1,7 @@
 # Pima Indians Diyabet Veri Seti — Makine Öğrenmesi Projesi
 ## Kapsamlı Final Raporu
 
-**Hazırlayan:** Eren Demirbaş  
+**Hazırlayan:** Eren Demirbaş - Ulaş Efe Sakarya
 **Tarih:** Nisan 2026  
 **Veri Seti:** Pima Indians Diabetes Dataset (768 örnek, 9 değişken)  
 **Proje Kapsamı:** Faz 1 → Faz 7 (Veri Ön İşleme → Final Model Değerlendirme)
@@ -133,7 +133,7 @@ Bu ifade Normal Denklem'in ta kendisidir. Dolayısıyla **β_EKK ≡ β_MLE** ma
 |---|---|
 | **Maksimum mutlak fark (β_EKK − β_MLE)** | **3.16 × 10⁻¹⁶** |
 | Float64 makine hassasiyeti | ~2.22 × 10⁻¹⁶ |
-| Uyum değerlendirmesi | ✅ Sayısal olarak sıfır — MÜKEMMEL |
+| Uyum değerlendirmesi | Sayısal olarak sıfır — MÜKEMMEL |
 
 ### 3.4 Katsayı Tablosu (Ortak β)
 
@@ -178,9 +178,9 @@ $$\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \underbrace{\frac{1}{n}\mathbf{
 | α | Son Loss | Val Acc | Yakınsama | Durum |
 |---|---|---|---|---|
 | **0.1** | 0.4610 | 0.7759 | iter 1122 | Hızlı — bazen riskli |
-| **0.01** | 0.4610 | 0.7759 | iter 5000 | ✅ **Optimal** |
+| **0.01** | 0.4610 | 0.7759 | iter 5000 | **Optimal** |
 | **0.001** | 0.4928 | 0.7500 | iter 5000 | Yavaş |
-| **0.0001** | 0.6299 | 0.7328 | iter 5000 | ❌ Yakınsamadı |
+| **0.0001** | 0.6299 | 0.7328 | iter 5000 |  Yakınsamadı |
 
 **Önemli Gözlem:** α=0.1 bu veri setinde ıraksamamıştır — çünkü veriler StandardScaler ile ölçeklendirilmiştir. Ölçeklendirilmemiş veride bu LR tipik olarak patlama yapardı. Bu da **Faz 1 ölçeklendirmesinin kritik önemini** bir kez daha doğrulamaktadır.
 
@@ -293,7 +293,7 @@ KNN modelinde K parametresi bu dengeyi doğrudan kontrol eder:
 | 13 | 0.185 | 0.259 | 0.216 | İyileşme |
 | **26** | 0.211 | **0.224** | 0.233 | ✅ **Optimum** |
 | 40 | 0.235 | 0.224 | 0.250 | Underfit başlar |
-| **50** | 0.248 | 0.233 | 0.241 | ⬆️ Underfit |
+| **50** | 0.248 | 0.233 | 0.241 | ⬇️ Underfit |
 
 **K=1:** Train Err = 0.000 — Model eğitim verisini tamamen ezberledi. Her eğitim noktası kendi tek komşusudur → sıfır hata. Test hatası %27.6 — ciddi overfit.
 
@@ -373,7 +373,7 @@ Bu tutarsızlık, iki yöntemin farklı varsayımlarından kaynaklanmaktadır: F
 | μ | 0.7833 |
 | σ | 0.0173 |
 | 95% CI | [0.7485, 0.8160] |
-| Q-Q R² | ~0.99 → Normal dağılım ✅ |
+| Q-Q R² | ~0.99 → Normal dağılım |
 
 ![04_bootstrap_histograms.png](/Users/erendemirbas/.gemini/antigravity/brain/64540d57-931a-4c9e-9576-bb597ce82e72/04_bootstrap_histograms.png)
 
@@ -401,7 +401,7 @@ ROC (Receiver Operating Characteristic) eğrisi, bir sınıflandırıcının tü
 | AUC Aralığı | Anlam |
 |---|---|
 | 0.90 – 1.00 | Mükemmel |
-| **0.80 – 0.90** | **İyi ✅ (Bizim modellerimiz)** |
+| **0.80 – 0.90** | **İyi (Bizim modellerimiz)** |
 | 0.70 – 0.80 | Kabul edilebilir |
 | 0.60 – 0.70 | Zayıf |
 | 0.50 – 0.60 | İşe yaramaz |
